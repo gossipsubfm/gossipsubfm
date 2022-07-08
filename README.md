@@ -1,3 +1,3 @@
-# GossipSub FM Model Repository
+# 💬 GossipSub FM Model Repository
 
 TODO
