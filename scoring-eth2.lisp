@@ -130,7 +130,7 @@
 (check= t (weightsp *eth-default-agg-subnet-weights*))
 
 ;; https://github.com/silesiacoin/prysm-spike/blob/d5ac70f0406b445a276ee61ba10fdf0eb6aafa0f/beacon-chain/p2p/gossip_scoring_params.go#L162
-(definec scoreDecay(x :pos-rat) :pos-rat
+(definecd scoreDecay(x :non-neg-rational) :non-neg-rational
   (b* (((when (= x 0)) 0)
        (numOfTimes (/ x *slot-duration*)))
     (expt *decayToZero* (floor 1 numOfTimes))))
@@ -461,6 +461,8 @@
 ;; 8.29
 ;; 22.21, -4.5, 7.80, -25, 7.78
 
+
+
 ;; We will now generate the list of events that led to the above
 ;; counter-example for P5
 
@@ -524,9 +526,8 @@
 
 
 
-
 (skip-proofs
- (definec emit-meshmsgdeliveries-peer-topic
+ (definecd emit-meshmsgdeliveries-peer-topic
    (p1 :peer p2 :peer top :topic n :nat) :loev
    (match n
      (0 '())
@@ -598,7 +599,7 @@
            (min-mesh-msgs-for-pos-scores rst m)
          (min-mesh-msgs-for-pos-scores rst mm))))))
 
-(definec max-hbm-interval (twpm :twp hbmint :pos-rat) :pos-rat
+(definec max-hbm-interval (twpm :twp hbmint :non-neg-rational) :non-neg-rational
   (match twpm
     (() hbmint)
     (((top . (wts . params)) . rst)
@@ -608,7 +609,7 @@
          (max-hbm-interval rst hbmint))))))
 
 (skip-proofs
-(definec max-activationwindow (twpm :twp a :pos-rat) :pos-rat
+(definec max-activationwindow (twpm :twp a :non-neg-rational) :non-neg-rational
   (match twpm
     (() a)
     (((top . (wts . params)) . rst)
@@ -616,7 +617,6 @@
        (if (> aw a)
            (max-hbm-interval rst aw)
          (max-hbm-interval rst a)))))))
-
 
 (skip-proofs
 (definec initialize-group-of-meshpeers (ps :lop mps :lop ts :lot d :nat) :group
@@ -636,8 +636,6 @@
                                  '()))
              (initialize-group-of-meshpeers rst mps ts d)))))))
 
-
-
 (definec evnts-for-pos-scores (ps :lop p2 :peer ts :lot ticks :pos twpm :twp) :loev
   :skip-body-contractsp t
   (if (null twpm)
@@ -654,16 +652,14 @@
      )))
 
 
-(len (evnts-for-pos-scores '(P1 P2) 'P100 '(SUB2) 4 *eth-twp*))
-
-
-(b* ((ticks 1000)
-     (grp (initialize-group-of-meshpeers '(P1 P2 P100)
-					 '(P1 P2 P100)
-					 '(BLOCKS AGG SUB1 SUB2 SUB3)
-                                         8))
-     (evnts (evnts-for-pos-scores '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3) ticks *eth-twp*)))
-  (run-network-gr grp evnts (len evnts) *eth-twp* 42))
+;; (len (evnts-for-pos-scores '(P1 P2) 'P100 '(SUB2) 4 *eth-twp*))
+;; (b* ((ticks 1000)
+;;      (grp (initialize-group-of-meshpeers '(P1 P2 P100)
+;; 					 '(P1 P2 P100)
+;; 					 '(BLOCKS AGG SUB1 SUB2 SUB3)
+;;                                          8))
+;;      (evnts (evnts-for-pos-scores '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3) ticks *eth-twp*)))
+;;   (run-network-gr grp evnts (len evnts) *eth-twp* 42))
 
 
 (skip-proofs
@@ -673,7 +669,7 @@
       '()
     (b* ((prms (cddr (assoc-equal targettop twpm)))
          ((when (null prms)) nil)
-         (pmmd (1- (params-meshMessageDeliveriesThreshold prms))))
+         (pmmd (max 0 (- (params-meshMessageDeliveriesThreshold prms) 1))))
       (app
        ;; for warmup + ticks/2 time, run to generate positive scores
        ;; (evnts-for-pos-scores ps p2 ts (1+ (floor ticks 2)) twpm)
@@ -684,17 +680,18 @@
                        t ;;attack
                        targetpeer
                        targettop
-                       (if (<= pmmd 0) 0 pmmd)))))))
+                       pmmd))))))
 
 
 
-;; (b* ((ticks 100)
+;; (b* ((ticks 19)
 ;;      (grp (initialize-group-of-meshpeers '(P1 P2 P100)
 ;; 					 '(P1 P2 P100)
-;; 					 '(BLOCKS AGG SUB1 SUB2 SUB3)))
+;; 					 '(BLOCKS AGG SUB1 SUB2 SUB3)
+;;                                          2))
 ;;      (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
 ;;                                         ticks *eth-twp* 'P1 'SUB2)))
-;;   (run-network-gr grp evnts (* 10 (len evnts)) *eth-twp* 42))
+;;   (run-network-gr grp evnts (* 2 (len evnts)) *eth-twp* 42))
 
 
 ;; Functions to check whether property 1 is actually being violated
@@ -777,17 +774,15 @@
 ;; increase ticks for longer durations
 
 ;; Debug
-;; (b* ((ticks 100)
-;;      (grp (initialize-group-of-meshpeers '(P1 P2 P100)
-;; 					 '(P1 P2 P100)
-;; 					 '(BLOCKS AGG SUB1 SUB2 SUB3)
-;;                                          8))
-;;      (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
-;;                                         ticks *eth-twp* 'P1 'SUB2)))
-;;  (run-network-gr grp evnts (* (len evnts) 10)
-;;                                               *eth-twp* 42))
-
-
+(b* ((ticks 19)
+     (grp (initialize-group-of-meshpeers '(P1 P2 P100)
+					 '(P1 P2 P100)
+					 '(BLOCKS AGG SUB1 SUB2 SUB3)
+                                         8))
+     (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
+                                        ticks *eth-twp* 'P1 'AGG)))
+ (run-network-gr grp evnts (* (len evnts) 10)
+                                              *eth-twp* 42))
 
 
 
@@ -799,10 +794,25 @@
 ;;      (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
 ;;                                         ticks *eth-twp* 'P1 'SUB2)))
 ;;   (scorePropViolationTopics (egl->pss (run-network grp evnts (* 10 (len evnts))
-;;                                               *eth-twp* 42 nil)
+;;                                               *eth-twp* 42)
 ;;                                  'P100)
 ;;                        'P1
 ;;                        'SUB2))
+
+
+
+(b* ((ticks 20)
+     (grp (initialize-group-of-meshpeers '(P1 P2 P100)
+					 '(P1 P2 P100)
+					 '(BLOCKS AGG SUB1 SUB2 SUB3)
+                                         2))
+     (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
+                                        ticks *eth-twp* 'P1 'AGG)))
+  (scorePropViolationTopics (egl->pss (run-network grp evnts (* 10 (len evnts))
+                                              *eth-twp* 42)
+                                 'P100)
+                       'P1
+                       'AGG))
 
 
 
@@ -811,27 +821,27 @@
      (grp (initialize-group-of-meshpeers '(P1 P2 P100)
 					 '(P1 P2 P100)
 					 '(BLOCKS AGG SUB1 SUB2 SUB3)
-                                         2))
-     (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
-                                        ticks *eth-twp* 'P1 'SUB2)))
-  (scorePropViolations (egl->pss (run-network grp evnts (* 10 (len evnts))
-                                              *eth-twp* 42 nil)
-                                 'P100)
-                       'P1
-                       'SUB2))
-
-
-
-;; List of events in the trace of our attack
-(b* ((ticks 100)
-     (grp (initialize-group-of-meshpeers '(P1 P2 P100)
-					 '(P1 P2 P100)
-					 '(BLOCKS AGG SUB1 SUB2 SUB3)
                                          8))
      (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
-                                        ticks *eth-twp* 'P1 'SUB2)))
-  (strip-cars (run-network grp evnts (* 1000 (len evnts))
-                           *eth-twp* 42 nil)))
+                                        ticks *eth-twp* 'P1 'AGG)))
+  (scorePropViolations (egl->pss (run-network grp evnts (* 10 (len evnts))
+                                              *eth-twp* 42)
+                                 'P100)
+                       'P1
+                       'AGG))
+
+
+
+;; ;; List of events in the trace of our attack
+;; (b* ((ticks 100)
+;;      (grp (initialize-group-of-meshpeers '(P1 P2 P100)
+;; 					 '(P1 P2 P100)
+;; 					 '(BLOCKS AGG SUB1 SUB2 SUB3)
+;;                                          8))
+;;      (evnts (evnts-for-property1-attack '(P1 P2) 'P100 '(BLOCKS AGG SUB1 SUB2 SUB3)
+;;                                         ticks *eth-twp* 'P1 'SUB2)))
+;;   (strip-cars (run-network grp evnts (* 10 (len evnts))
+;;                            *eth-twp* 42)))
 
 
 
@@ -848,11 +858,11 @@
 	       pglb :p-gctrs-map
 	       p :peer
 	       top :topic
-	       delta-p3 :pos-rat
-	       delta-p3b :pos-rat
-	       delta-p4 :pos-rat
-	       delta-p6 :pos-rat
-	       delta-p7 :pos-rat)
+	       delta-p3 :non-neg-rational
+	       delta-p3b :non-neg-rational
+	       delta-p4 :non-neg-rational
+	       delta-p6 :non-neg-rational
+	       delta-p7 :non-neg-rational)
   :proofs? nil
   :testing-timeout 600
   :CHECK-CONTRACTS? nil
