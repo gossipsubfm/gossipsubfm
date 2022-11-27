@@ -24,67 +24,66 @@
                   (list peer 'LEAVE topic)
                   (list peer verb peer 'CONNECT1 lot)
                   (list peer verb peer 'CONNECT2 lot)
-                  (list peer 'HBM pos-rat)
+                  (list peer 'HBM pos-rational)
                   (list peer 'APP topic payload-type)))
 ;; In the case above, the topic is redundant.
 (defdata loev (listof evnt))
 (defdata (peer-lot-map   (alistof peer lot)))
 (defdata (topic-lop-map  (alistof topic lop)))
-(defdata (topic-nat-map  (alistof topic nat)))
+(defdata (topic-pos-rat-map  (alistof topic non-neg-rational)))
 
 ;;The following state deals with neighbours and topics they follow,
 ;; hence we call it (n)eighbour(t)opic-state or nbr-topic-state
 (defdata nbr-topic-state
-  (record (nbr-topicsubs . topic-lop-map)     ;; peer's neighbours'
+  (record (nbr-topicsubs . topic-lop-map) ;; peer's neighbours'
           ;; subscriptions, includes peer itself, tokeep track of its own subs
           ;; let's keep this as topic-lop-map, as its convenient, no need to
           ;; invert map
-          (topic-fanout  . topic-lop-map)    ;; peer doesn't subscribe to these
+          (topic-fanout  . topic-lop-map) ;; peer doesn't subscribe to these
           ;; topics
-          (last-pub      . topic-nat-map)    ;; last published time for a topic
+          (last-pub      . topic-pos-rat-map) ;; last published time for a topic
           (topic-mesh    . topic-lop-map)))  ;; peer subscribes to these topics
 ;; and is part of corresponding topic mesh
 
-
-(defthm nbr-topic-state-check
-  (== (NBR-TOPIC-STATEP
-       (MSET :0TAG 'NBR-TOPIC-STATE
-             (MSET :LAST-PUB VAR-LAST-PUB
-                   (MSET :TOPIC-MESH VAR-TOPIC-MESH
-                         (MSET :TOPIC-FANOUT VAR-TOPIC-FANOUT
-                               (MSET :NBR-TOPICSUBS
-                                     VAR-NBR-TOPICSUBS NIL))))))
-      (^ (topic-lop-mapp var-nbr-topicsubs)
-         (topic-lop-mapp var-topic-fanout)
-         (topic-nat-mapp var-last-pub)
-         (topic-lop-mapp var-topic-mesh)))
-  :hints (("Goal" :in-theory (enable nbr-topic-statep))))
-
-
+(property nbr-topic-state-check-prop (x :nbr-topic-state)
+  (^ (topic-lop-mapp (g :nbr-topicsubs x))
+     (topic-lop-mapp (g :topic-fanout x))
+     (topic-pos-rat-mapp (g :last-pub x))
+     (topic-lop-mapp (g :topic-mesh x)))
+  :hints (("Goal" :in-theory (enable nbr-topic-statep)))
+  :rule-classes :forward-chaining)
 
 (definec new-nbr-topic-state () :nbr-topic-state
   (nbr-topic-state nil nil nil nil))
 
 (definec dist-cons (x :cons) :tl
   (cond ((atom (cdr x)) nil)
-	(t (cons `(,(car x) . ,(cadr x))
-		 (dist-cons `(,(car x) . ,(cddr x)))))))
+        (t (cons `(,(car x) . ,(cadr x))
+                 (dist-cons `(,(car x) . ,(cddr x)))))))
 
 (check= (dist-cons '(1 2 3)) '((1 . 2) (1 . 3)))
 
 (create-map* dist-cons alistp tlp)
 
-(definecd flatten-map (al :alist) :alist
-  (flatten (map* dist-cons al)))
+(defdata txp (cons topic peer))
+(defdata lotopicpeer (alistof topic peer))
+(property lotopicpeer-type (x :lotopicpeer)
+  (=> x
+      (^ (txpp (car x))
+         (topicp (car (car x)))
+         (peerp (cdr (car x)))))
+  :rule-classes ((:forward-chaining :trigger-terms ((lotopicpeerp x)))))
 
-(check= (flatten-map '((1) (1 . (1 2)) (1 . (3 4))))
-	'((1 . 1) (1 . 2) (1 . 3) (1 . 4)))
+(property dist-cons-tlm (ls :topic-lop-map)
+  (=> ls
+      (lotopicpeerp (dist-cons (car ls)))))
+(in-theory (disable txpp lotopicpeerp))
 
-(definec flip-cons (x :cons) :cons
-  (cons (cdr x) (car x)))
-
-(create-map* flip-cons alistp alistp)
-
+(definecd flatten-topic-lop-map (ls :topic-lop-map) :lotopicpeer
+  (match ls
+    (() '())
+    ((l . rst) (app (dist-cons l)
+                    (flatten-topic-lop-map rst)))))
 
 (definecd peer-subs (top-peers :topic-lop-map self :peer) :lot
   (match top-peers
@@ -100,11 +99,11 @@
   (^ (! (intersectp-equal (acl2::alist-keys (nbr-topic-state-topic-mesh ps))
                           (acl2::alist-keys (nbr-topic-state-topic-fanout ps))))
 ;peer knows what topics are subscribed to by nbrs in fanout
-     (subsetp-equal (flatten-map (nbr-topic-state-topic-fanout ps))
-                    (flatten-map (nbr-topic-state-nbr-topicsubs ps)))
+     (subsetp-equal (flatten-topic-lop-map (nbr-topic-state-topic-fanout ps))
+                    (flatten-topic-lop-map (nbr-topic-state-nbr-topicsubs ps)))
 ;peer knows what topics are subscribed to by nbrs in each topic mesh
-     (subsetp-equal (flatten-map (nbr-topic-state-topic-mesh ps))
-                    (flatten-map (nbr-topic-state-nbr-topicsubs ps)))))
+     (subsetp-equal (flatten-topic-lop-map (nbr-topic-state-topic-mesh ps))
+                    (flatten-topic-lop-map (nbr-topic-state-nbr-topicsubs ps)))))
 
 (defconst *MX-STATE*
   (nbr-topic-state '((FM P2) (SEC P2) (DS MX) (SE AN))
@@ -120,16 +119,20 @@
     (put-assoc-equal topic (cons nbr old-subscribers) top-peers)))
 
 (create-reduce* (lambda (tp tmp p) (add-sub tmp p tp))
-             topic-lop-mapp
-             lotp
-             (:name add-peer-subs)
-             (:fixed-vars ((peerp p))))
+                topic-lop-mapp
+                lotp
+                (:name add-peer-subs)
+                (:fixed-vars ((peerp p))))
 
+(property assoc-mesh (topic :topic top-peers :topic-lop-map)
+  (lopp (cdr (assoc-equal topic top-peers))))
+          
 (definecd rem-sub (top-peers :topic-lop-map nbr :peer topic :topic)
   :topic-lop-map
-  :SKIP-BODY-CONTRACTSP T
+  :body-contracts-hints (("Goal" :in-theory (enable topic-lop-mapp)))
   (let ((old-subscribers (cdr (assoc-equal topic top-peers))))
     (put-assoc-equal topic (remove-equal nbr old-subscribers) top-peers)))
+
 
 (create-reduce* (lambda (nbr tmp topic) (add-sub tmp nbr topic))
                 topic-lop-mapp
@@ -137,40 +140,31 @@
                 (:name add-subs)
                 (:fixed-vars ((topicp topic))))
 
-(in-theory (disable tctrsp))
-
-(property rem-peer-tctrs (p :peer top :topic m :pt-tctrs-map)
-          (pt-tctrs-mapp (remove-assoc-equal `(,p . ,top) m)))
-
+(sig remove-assoc-equal (:a (alistof :a :b)) => (alistof :a :b))
+(sig put-assoc-equal (:a :b (alistof :a :b)) => (alistof :a :b))
+          
 (definecd update-topic-mesh
   (nts :nbr-topic-state new-topic-mesh :topic-lop-map) :nbr-topic-state
-  (mset :topic-mesh new-topic-mesh nts))
+  (s :topic-mesh new-topic-mesh nts))
 
 (definecd update-last-pub
-  (nts :nbr-topic-state new-last-pub :topic-nat-map) :nbr-topic-state
-  (mset :last-pub new-last-pub nts))
+  (nts :nbr-topic-state new-last-pub :topic-pos-rat-map) :nbr-topic-state
+  (s :last-pub new-last-pub nts))
 
-(defthm rem-key-topic-lop-map
-  (implies (and (topicp topic)
-		(topic-lop-mapp tmap))
-	   (topic-lop-mapp (remove-assoc-equal topic tmap))))
-
-(definec update-nbr-topicsubs
+(definecd update-nbr-topicsubs
   (nbr-topic-state :nbr-topic-state new-nbr-topicsubs :topic-lop-map) :nbr-topic-state
-  (mset :nbr-topicsubs new-nbr-topicsubs nbr-topic-state))
+  (s :nbr-topicsubs new-nbr-topicsubs nbr-topic-state))
 
-(definec update-topic-fanout
+(definecd update-topic-fanout
   (nbr-topic-state :nbr-topic-state new-topic-fanout :topic-lop-map) :nbr-topic-state
-  (mset :topic-fanout new-topic-fanout nbr-topic-state))
+  (s :topic-fanout new-topic-fanout nbr-topic-state))
 
 (definecd remove-peer-submap (tmp :topic-lop-map nbr :peer) :topic-lop-map
-  (if (endp tmp)
-      nil
-    (if (endp (cdar tmp))
-        (remove-peer-submap (cdr tmp) nbr)
-      (cons `(,(caar tmp) . ,(remove-equal nbr (cdar tmp)))
-            (remove-peer-submap (cdr tmp) nbr)))))
-
+  (match tmp
+    (() '())
+    (((tp . ps) . rst)
+     `((,tp . ,(remove-equal nbr ps)) . 
+       ,(remove-peer-submap rst nbr)))))
 
 (create-reduce*
  (lambda (p tmp) (remove-peer-submap tmp p))
@@ -188,55 +182,42 @@
                 (:name gt-s-filter)
                 (:fixed-vars ((rationalp s))))
 
-(defthm shuffle-peers
-  (=> (^ (lopp ps) (natp s))
-      (lopp (shuffle ps s))))
+(sig shuffle ((listof :a) nat) => (listof :a))
+(sig grab (nat (listof :a)) => (listof :a))
 
-(defthm grab-peers
-  (=> (^ (lopp ps) (natp d))
-      (lopp (grab d ps))))
+(in-theory (disable shuffle grab filter*-*lt-0-filter filter*-*gt-s-filter))
 
-(in-theory (disable shuffle grab))
-
-(definecd remove-excess-mesh (mesh :topic-lop-map dhigh :nat d :nat s :nat)
+(definecd remove-excess-mesh (mesh :topic-lop-map dhigh d s :nat)
   :topic-lop-map
   (b* (((mv & s) (defdata::genrandom-seed
-		   (1- (expt 2 31))
-		   (mod s (expt 2 31)))))
-  (match mesh
-    (() '())
-    (((tp . nbrs) . rst)
-     (cons (if (< dhigh (len nbrs))
-               `(,tp . ,(grab d (shuffle nbrs s)))
-             (car mesh))
-           (remove-excess-mesh rst dhigh d s))))))
+                   (1- (expt 2 31))
+                   (mod s (expt 2 31)))))
+    (match mesh
+      (() '())
+      (((tp . nbrs) . rst)
+       (cons (if (< dhigh (len nbrs))
+                 `(,tp . ,(grab d (shuffle nbrs s)))
+               (car mesh))
+             (remove-excess-mesh rst dhigh d s))))))
 
-
-(defdata lotopicpeer (alistof topic peer))
+; PETE: better rule
+#|
+(property caar-mesh-topicp (mesh :topic-lop-map)
+  (=> (consp (car mesh))
+      (topicp (car (car mesh)))))
+|#
 
 (property caar-mesh-topicp (mesh :topic-lop-map)
-         (=> (consp (car mesh))
-             (topicp (car (car mesh)))))
+  (=> (consp mesh)
+      (topicp (caar mesh))))
 
-(property topic-lop-map-assoc (tp :topic al :topic-lop-map)
-          (lopp (cdr (assoc-equal tp al))))
+(property add-mesh-nbrs-help (candidates :topic-lop-map mesh :all)
+  :check-contracts? nil
+  (=> (topic-lop-mapp (cdr mesh))
+      (tlp (cdr (assoc-equal (caar mesh) candidates)))))
 
-(property app-lopp (xs :lop ys :lop)
-          (lopp (app xs ys)))
-
-(defthm add-mesh-nbrs-help
-          (IMPLIES (AND 
-              (TOPIC-LOP-MAPP CANDIDATES)
-              (LOPP (CDR (CAR MESH)))
-              (TOPIC-LOP-MAPP (CDR MESH))
-              (CONSP MESH)
-              (CONSP (CAR MESH)))
-         (TLP (CDR (ASSOC-EQUAL (CAR (CAR MESH))
-                                CANDIDATES)))))
-
-(definecd add-mesh-nbrs (mesh :topic-lop-map candidates :topic-lop-map dlow
-  :nat d :nat)
-  :topic-lop-map
+(definecd add-mesh-nbrs
+  (mesh candidates :topic-lop-map dlow d :nat) :topic-lop-map
   :ic (<= dlow d)
   (match mesh
     (() '())
@@ -248,127 +229,104 @@
              (car mesh))
            (add-mesh-nbrs rst candidates dlow d)))))
 
-
 (create-tuple* nbr-topic-state lop)
-;; (definecd mesh-mnt-per-topic (nts :nbr-topic-state top :topic prm
-;;                                   :peer-rational-map params :params) :nbr-topic-statelop
-;;   (b* ((mesh-nbrs (cdr (assoc-equal top (nbr-topic-state-topic-mesh nts))))
-;;        ((when (> (len mesh-nbrs) (params-dhigh params))) -)
-;;        ((when (< (len mesh-nbrs) (params-dlow params))) -))
-;;     (cons nts nil)))
-
 
 (property nbr-topicsubs-lookup (subs :peer-lot-map p :peer)
-          (lotp (cdr (assoc-equal p subs))))
+  (lotp (cdr (assoc-equal p subs))))
 
 (property topic-mesh-lookup (topic-mesh :topic-lop-map tp :topic)
-          (lopp (cdr (assoc-equal tp topic-mesh))))
+  (lopp (cdr (assoc-equal tp topic-mesh))))
 
+(encapsulate
+ ()
+ (local
+   (property meshtime-ctr-help2
+     (elapsed :pos-rational mesh-topic-nbrs :lotopicpeer
+              nbr-counters :pt-tctrs-map)
+     (=> mesh-topic-nbrs
+         (non-neg-rationalp
+          (g :meshtime (lookup-tctrs (cdr (car mesh-topic-nbrs))
+                                        (car (car mesh-topic-nbrs))
+                                        nbr-counters))))
+     :hints (("goal" :do-not-induct t
+              :use ((:instance lotopicpeer-type (x mesh-topic-nbrs))) 
+              :in-theory (disable lookup-tctrs txpp)))))
 
-(defthm meshtime-ctr-help
- (POS-RATP (MGET :MESHTIME (LOOKUP-TCTRS (CDR (CAR MESH-TOPIC-NBRS))
-                                            (CAR (CAR MESH-TOPIC-NBRS))
-                                            NIL))))
-(defthm meshtime-ctr-help2
-  (IMPLIES
-   (AND (RATIONALP ELAPSED)
-        (< 0 ELAPSED)
-        (LOTOPICPEERP MESH-TOPIC-NBRS)
-        (PT-TCTRS-MAPP NBR-COUNTERS)
-        MESH-TOPIC-NBRS
-        )
-   (POS-RATP (MGET :MESHTIME (LOOKUP-TCTRS (CDR (CAR MESH-TOPIC-NBRS))
-                                           (CAR (CAR MESH-TOPIC-NBRS))
-                                           NBR-COUNTERS)))))
+ (local
+   (property nn+pos (a :pos-rational b :non-neg-rational)
+     (non-neg-rationalp (+ a b))))
 
-(property add-posrats (a :rational b :pos-rat)
-          (=> (< 0 a)
-              (pos-ratp (+ a b))))
+ (local
+   (property meshtime-ctr-help3 (elapsed :pos-rational mesh-topic-nbrs :lotopicpeer
+                                         nbr-counters :pt-tctrs-map)
+     (=> mesh-topic-nbrs
+         (non-neg-rationalp (+ elapsed
+                               (g :meshtime (lookup-tctrs (cdr (car mesh-topic-nbrs))
+                                                             (car (car mesh-topic-nbrs))
+                                                             nbr-counters)))))
+     :hints (("goal" :do-not-induct t
+              :use (meshtime-ctr-help2)
+              :in-theory (disable lookup-tctrs txpp)))))
 
-(defthm meshtime-ctr-help3
-  (IMPLIES
-   (AND (RATIONALP ELAPSED)
-        (< 0 ELAPSED)
-        (LOTOPICPEERP MESH-TOPIC-NBRS)
-        (PT-TCTRS-MAPP NBR-COUNTERS)
-        MESH-TOPIC-NBRS
-        )
-   (POS-RATP (+ ELAPSED
-                (MGET :MESHTIME (LOOKUP-TCTRS (CDR (CAR MESH-TOPIC-NBRS))
-                                           (CAR (CAR MESH-TOPIC-NBRS))
-                                           NBR-COUNTERS)))))
-  :hints (("Goal" :in-theory (disable LOOKUP-TCTRS))))
+ (definecd update-mesh-times-counters
+   (nbr-counters :pt-tctrs-map mesh-topic-nbrs :lotopicpeer elapsed :pos-rational) :pt-tctrs-map
+   (if (endp mesh-topic-nbrs)
+       nbr-counters
+     (b* ((p (cdar mesh-topic-nbrs))
+          (top (caar mesh-topic-nbrs))
+          (tmp (lookup-tctrs p top nbr-counters)))
+       (update-mesh-times-counters
+        (put-assoc-equal (cons p top)
+                         (update-meshTime tmp
+                                          (+ elapsed
+                                             (tctrs-meshTime tmp)))
+                         nbr-counters)
+        (cdr mesh-topic-nbrs)
+        elapsed)))))
 
+(encapsulate
+ ()
+ (local
+   (property mget-mmd-default (top :topic nbr :peer)
+     (== (g :meshmessagedeliveries
+               (lookup-tctrs nbr top nil))
+         0)
+     :hints (("goal" :in-theory (enable lookup-tctrs)))))
 
-(definecd update-mesh-times-counters
-  (nbr-counters :pt-tctrs-map mesh-topic-nbrs :lotopicpeer elapsed :pos-rat) :pt-tctrs-map
-  (if (endp mesh-topic-nbrs)
-      nbr-counters
-    (b* ((p (cdar mesh-topic-nbrs))
-         (top (caar mesh-topic-nbrs))
-         (tmp (lookup-tctrs p top nbr-counters)))
-      (update-mesh-times-counters
-       (put-assoc-equal (cons p top)
-			(update-meshTime tmp
-					 (+ elapsed
-					    (tctrs-meshTime tmp)))
-			nbr-counters)
-       (cdr mesh-topic-nbrs)
-       elapsed)))
-  :body-contracts-hints (("Goal" :use meshtime-ctr-help3)))
+ (local
+   (property plus-mfp-exptdeficit-posratp
+     (meshmessagedeliveriesthreshold meshmessagedeliveriescap :nat
+                                     top :topic nbr :peer nbr-counters :pt-tctrs-map)
+     (=> (<= meshmessagedeliveriesthreshold
+             meshmessagedeliveriescap)
+         (non-neg-rationalp
+          (+
+           (g :meshfailurepenalty (lookup-tctrs nbr top nbr-counters))
+           (expt
+            (calc-deficit
+             (g :meshmessagedeliveries (lookup-tctrs nbr top nbr-counters))
+             meshmessagedeliveriescap
+             meshmessagedeliveriesthreshold)
+            2))))
+     :hints (("goal" :in-theory (enable lookup-tctrs)))))
 
-
-(defthm mget-def-0
-  (=>
-   (^ (SYMBOLP TOP)
-      (SYMBOLP NBR))
-   (== (MGET :MESHMESSAGEDELIVERIES (LOOKUP-TCTRS NBR TOP NIL))
-       0))
-  :HINTS (("Goal" :in-theory (enable lookup-tctrs))))
-
-(defthm plus-mfp-exptdeficit-posratp
-  (IMPLIES
- (AND
-  (<= MESHMESSAGEDELIVERIESTHRESHOLD
-      MESHMESSAGEDELIVERIESCAP)
-  (INTEGERP MESHMESSAGEDELIVERIESTHRESHOLD)
-  (<= 0 MESHMESSAGEDELIVERIESTHRESHOLD)
-  (INTEGERP MESHMESSAGEDELIVERIESCAP)
-  (<= 0 MESHMESSAGEDELIVERIESCAP)
-  (SYMBOLP TOP)
-  (SYMBOLP NBR)
-  (PT-TCTRS-MAPP NBR-COUNTERS))
- (POS-RATP
-  (+
-   (MGET :MESHFAILUREPENALTY (LOOKUP-TCTRS NBR TOP NBR-COUNTERS))
-   (EXPT
-       (CALC-DEFICIT
-            (MGET :MESHMESSAGEDELIVERIES (LOOKUP-TCTRS NBR TOP NBR-COUNTERS))
-            MESHMESSAGEDELIVERIESCAP
-            MESHMESSAGEDELIVERIESTHRESHOLD)
-       2))))
-  :HINTS (("Goal" :in-theory (enable lookup-tctrs))))
-  
-
-(definecd retain-mesh-failure-counters
-  (nbr-counters :pt-tctrs-map nbr :peer top :topic
-                meshMessageDeliveriesCap :nat meshMessageDeliveriesThreshold :nat)
-  :pt-tctrs-map
-  :skip-tests t
-  :ic (>= meshMessageDeliveriesCap
-	  meshMessageDeliveriesThreshold)
-  (b* ((counters                       (lookup-tctrs nbr top nbr-counters))
-       (dfct                           (calc-deficit (tctrs-meshMessageDeliveries counters)
-                                                     meshMessageDeliveriesCap
-                                                     meshMessageDeliveriesThreshold))
-       (new-meshFailurePenalty (+ (tctrs-meshFailurePenalty counters)
-                                  (* dfct dfct))))
-    (put-assoc-equal (cons nbr top)
-		     (update-meshFailurePenalty counters new-meshFailurePenalty)
-		     nbr-counters))
-    :body-contracts-hints (("Goal" :use plus-mfp-exptdeficit-posratp)))
-
-
+ (definecd retain-mesh-failure-counters
+   (nbr-counters :pt-tctrs-map nbr :peer top :topic
+                 meshMessageDeliveriesCap meshMessageDeliveriesThreshold :nat)
+   :pt-tctrs-map
+   :skip-tests t
+   :ic (>= meshMessageDeliveriesCap
+           meshMessageDeliveriesThreshold)
+   (b* ((counters (lookup-tctrs nbr top nbr-counters))
+        (dfct     (calc-deficit (tctrs-meshMessageDeliveries counters)
+                                meshMessageDeliveriesCap
+                                meshMessageDeliveriesThreshold))
+        (new-meshFailurePenalty (+ (tctrs-meshFailurePenalty counters)
+                                   (* dfct dfct))))
+     (put-assoc-equal (cons nbr top)
+                      (update-meshFailurePenalty counters new-meshFailurePenalty)
+                      nbr-counters))
+   :body-contracts-hints (("Goal" :use plus-mfp-exptdeficit-posratp))))
 
 (check=
  (retain-mesh-failure-counters
@@ -392,21 +350,23 @@
     (:MESHTIME . 0))))
 
 (definecd retain-multiple-mesh-failure-counters
-  (nbr-counters-map :pt-tctrs-map tp-nbr-lst :lotopicpeer meshMessageDeliveriesCap :nat meshMessageDeliveriesThreshold :nat)
+  (nbr-counters-map :pt-tctrs-map tp-nbr-lst :lotopicpeer
+                    meshMessageDeliveriesCap meshMessageDeliveriesThreshold :nat)
   :pt-tctrs-map
   :skip-tests t  
   :ic (>= meshMessageDeliveriesCap
-	  meshMessageDeliveriesThreshold)
+          meshMessageDeliveriesThreshold)
   (if (endp tp-nbr-lst)
       nbr-counters-map
     (retain-multiple-mesh-failure-counters
      (retain-mesh-failure-counters
       nbr-counters-map (cdar tp-nbr-lst) (caar tp-nbr-lst)
-  meshMessageDeliveriesCap meshMessageDeliveriesThreshold)
+      meshMessageDeliveriesCap meshMessageDeliveriesThreshold)
      (cdr tp-nbr-lst)
      meshMessageDeliveriesCap
      meshMessageDeliveriesThreshold)))
 
+(in-theory (enable lotopicpeerp))
 
 (create-filter* (lambda (p nbrs) (in (cdr p) nbrs))
                 lotopicpeerp
@@ -417,7 +377,6 @@
                                    (DS . P3))
                  '(MX))
         '((SE . MX)))
-
 
 (create-map* (lambda (tp p) `(,p SND ,(cdr tp) GRAFT ,(car tp)))
              lotopicpeerp
@@ -443,24 +402,28 @@
              (:name mk-unsubs)
              (:fixed-vars ((peerp p))))
 
-(definecd age-lastpub (lastpub :topic-nat-map elapsed :nat) :topic-nat-map
+(in-theory (disable filter*-*remvd-topic-nbr map*-*mk-grafts map*-*mk-prunes
+                    map*-*mk-subs map*-*mk-unsubs))
+
+(definecd age-lastpub (lastpub :topic-pos-rat-map elapsed :pos-rational) :topic-pos-rat-map
   (match lastpub
     (() '())
     (((tp . age) . rst) (cons `(,tp . ,(+ age elapsed))
                               (age-lastpub rst elapsed)))))
 
-(defthm topic-subs-assoc
-  (IMPLIES
-   (AND (TOPIC-LOP-MAPP TOPIC-SUBS)
-        (TOPIC-LOP-MAPP TFANOUT)
-        (TOPIC-NAT-MAPP LASTPUB)
-        (CONSP LASTPUB)
-        (CONSP (CAR LASTPUB)))
-   (TLP (CDR (ASSOC-EQUAL (CAR (CAR LASTPUB))
-                          TOPIC-SUBS)))))
+(property topic-subs-assoc (topic-subs :topic-lop-map lastpub :topic-pos-rat-map)
+  (=> lastpub
+      (lopp (cdr (assoc-equal (car (car lastpub))
+                              topic-subs)))))
 
+; Pete: horrible rewrite rule
+(property lopp->tlp (x :lop)
+  (tlp x)
+  :rule-classes ((:rewrite :backchain-limit-lst 2)))
 
-(definecd prune-fanout (lastpub :topic-nat-map tfanout :topic-lop-map topic-subs :topic-lop-map fanoutttl :nat d :nat) :topic-lop-map
+(definecd prune-fanout
+  (lastpub :topic-pos-rat-map tfanout topic-subs :topic-lop-map
+           fanoutttl :pos-rational d :nat) :topic-lop-map
   :skip-tests t
   (match lastpub
     (() tfanout)
@@ -484,9 +447,9 @@
                                           fanoutttl
                                           d))))))
 
-
-(definecd fanout-maintenance (nts :nbr-topic-state topic-subs :topic-lop-map
-  elapsed :nat fanoutttl :nat d :nat) :nbr-topic-state
+(definecd fanout-maintenance
+  (nts :nbr-topic-state topic-subs :topic-lop-map
+       elapsed fanoutttl :pos-rational d :nat) :nbr-topic-state
   (b* ((new-last-pub (age-lastpub (nbr-topic-state-last-pub nts) elapsed))
        (new-nts (update-last-pub nts new-last-pub)))
     (update-topic-fanout new-nts (prune-fanout new-last-pub
@@ -495,11 +458,8 @@
                                                fanoutttl
                                                d))))
 
-(defthm lopp->tlp
-  (=> (lopp x) (tlp x)))
-
 (property assoc-nbr-topic-state (nts :nbr-topic-state top :topic)
-          (lopp (CDR (ASSOC-EQUAL TOP (NBR-TOPIC-STATE-TOPIC-MESH NTS)))))
+  (lopp (cdr (assoc-equal top (nbr-topic-state-topic-mesh nts)))))
 
 (definecd nbrs-not-in-mesh (nts :nbr-topic-state top :topic) :lop
   (b* ((topic-meshes (nbr-topic-state-topic-mesh nts))
@@ -508,25 +468,22 @@
        (topic-nbrs (cdr (assoc-equal top (nbr-topic-state-nbr-topicsubs nts)))))
     (set-difference-equal topic-nbrs topic-mesh-nbrs)))
 
-
 (property extract-keys-nbr-scores (peers :lop nbr-scores :peer-rational-map)
-          (peer-rational-mapp (extract-keys peers nbr-scores))
-          :hints (("Goal" :in-theory (enable extract-keys))))
+  (peer-rational-mapp (extract-keys peers nbr-scores))
+  :hints (("Goal" :in-theory (enable extract-keys))))
 
 (property extract-cars-nbr-scores (nbr-scores :peer-rational-map)
-          (lopp (strip-cars nbr-scores)))
+  (lopp (strip-cars nbr-scores)))
 
 (property extract-cdrs-nbr-scores (nbr-scores :peer-rational-map)
-          (lorp (strip-cdrs nbr-scores)))
+  (lorp (strip-cdrs nbr-scores)))
 
 (property dist-cons-top-peers (top :topic peers :lop)
-          (lotopicpeerp (dist-cons (cons top peers))))
+  (lotopicpeerp (dist-cons (cons top peers))))
 
-(definecd opportunistic-grafting (p1 :peer
-                                    top :topic
-                                    nts :nbr-topic-state
-                                    nbr-scores :peer-rational-map
-                                    params :params)
+(definecd opportunistic-grafting-topic
+  (p1 :peer top :topic nts
+      :nbr-topic-state nbr-scores :peer-rational-map params :params)
   :loev
   (b* ((ogt (params-opportunisticGraftThreshold params))
        (not-mesh-peers (nbrs-not-in-mesh nts top))
@@ -542,59 +499,28 @@
                   median-score))))
     (map* mk-grafts (dist-cons `(,top . ,eligible-for-grafting)) p1)))
 
-
-
-(definecd opportunistic-grafting-topics (p1 :peer
-                                            tops :lot
-                                            nts :nbr-topic-state
-                                            nbr-scores :peer-rational-map
-                                            params :params)
+(definecd opportunistic-grafting
+  (p1 :peer tops :lot nts :nbr-topic-state
+      nbr-scores :peer-rational-map params :params)
   :loev
+  :skip-tests t
   :ic (^ (>= (params-meshMessageDeliveriesCap params)
-	      (params-meshMessageDeliveriesThreshold params))
-	  (<= (params-dlow params) (params-d params))
-	  (>= (params-dhigh params) (params-d params)))
+             (params-meshMessageDeliveriesThreshold params))
+         (<= (params-dlow params) (params-d params))
+         (>= (params-dhigh params) (params-d params)))
   (match tops
     (() '())
-    ((top . rst) (app (opportunistic-grafting p1 top nts nbr-scores params)
-                      (opportunistic-grafting-topics p1 rst nts nbr-scores
-                                                    params)))))
+    ((top . rst) (app (opportunistic-grafting-topic p1 top nts nbr-scores params)
+                      (opportunistic-grafting p1 rst nts nbr-scores
+                                              params)))))
 
 (property flat-vals-topic-lops (al :topic-lop-map)
-          (lopp (acl2s::flatten (acl2::alist-vals al))))
+  (lopp (acl2s::flatten (acl2::alist-vals al))))
+
+(sig set-difference-equal ((listof :a) (listof :a)) => (listof :a))
 
 (create-tuple* nbr-topic-state loev pt-tctrs-map p-gctrs-map peer-rational-map)
 
-(defthm twp-dlow-int
-  (=> (^ (twpp twpm) twpm)
-      (INTEGERP (MGET :DLOW (CDDR (CAR TWPM))))))
-
-(defthm twp-cddar-paramsp
-  (=> (^ (twpp twpm) twpm)
-      (PARAMSP (CDDR (CAR TWPM)))))
-
-(defthm dlow-number
-  (=> (^ (twpp twpm) twpm)
-      (ACL2-NUMBERP (MGET :D (CDDR (CAR TWPM))))))
-
-(defthm dlow-lt-d-twp
-  (=> (^ (twpp twpm)
-         (is-valid-twp twpm)
-         (ACL2-NUMBERP (MGET :D (CDDR (CAR TWPM)))))
-      (<= (MGET :DLOW (CDDR (CAR TWPM)))
-          (MGET :D (CDDR (CAR TWPM)))))
-  :hints (("Goal" :in-theory (enable lookup-twpm is-valid-twp wpp paramsp))))
-
-(defthm dlow-gt-0-twp
-  (=> (^ (twpp twpm)
-         (is-valid-twp twpm)
-         (ACL2-NUMBERP (MGET :D (CDDR (CAR TWPM)))))
-      (<= 0 (MGET :DLOW (CDDR (CAR TWPM)))))
-  :hints (("Goal" :in-theory (enable lookup-twpm is-valid-twp wpp paramsp))))
-
-(property set-diff-lop (xs :lop ys :lop)
-          (lopp (set-difference-equal xs ys)))
- 
 (definecd rem-val-peers (al :topic-lop-map rl :lop) :topic-lop-map
   (match al
     (() '())
@@ -602,25 +528,105 @@
      (cons `(,k . ,(set-difference-equal v rl))
            (rem-val-peers rst rl)))))
 
-(in-theory (disable paramsp))
+(create-reduce* (lambda (tp-ps tmp) (app tmp (cdr tp-ps)))
+                lopp
+                topic-lop-mapp
+                (:name subscribers))
 
-(skip-proofs
-(definecd update-nbr-topic-state (nts :nbr-topic-state
-                                      nbr-scores :peer-rational-map
-                                      tcmap :pt-tctrs-map
-                                      gcmap :p-gctrs-map
-                                      evnt :evnt
-                                      twpm :twp
-                                      s :nat)
+(check= (reduce* subscribers
+                 nil
+                 '((T1 P1 P2 P3)
+                   (T2 P4 P5 P1)))
+        '(P4 P5 P1 P1 P2 P3))
+
+(create-reduce* (lambda (tp-ps tmp p) (if (in p (cdr tp-ps))
+                                          (cons (car tp-ps) tmp)
+                                        tmp))
+                lotp
+                topic-lop-mapp
+                (:name subscriptions)
+                (:fixed-vars ((peerp p))))
+
+(check= (reduce* subscriptions
+                 nil
+                 '((FM ANKIT MAX)
+                   (SEC MAX))
+                 'MAX)
+        '(FM SEC))
+
+(in-theory (disable evntp reduce*-*subscribers reduce*-*subscriptions
+                    NBR-TOPIC-STATEP paramsp pt-tctrs-mapp p-gctrs-mapp
+                    peer-rational-mapp twpp))
+
+(property cars-topic-lop-map (tlm :topic-lop-map)
+  (lotp (strip-cars tlm)))
+
+(definecd rem-peers-topic-lop-map (al :topic-lop-map rl :lop) :topic-lop-map
+  (match al
+    (() '())
+    (((k . v) . rst)
+     (cons `(,k . ,(set-difference-equal v rl))
+           (rem-peers-topic-lop-map rst rl)))
+    (& nil)))
+
+; Pete, better rewrite rule
+#|
+(defthm evnt-trx1
+  (=> (evntp (list P1 'RCV P2 'GRAFT TP))
+      (evntp (list P1 'SND P2 'PRUNE TP)))
+  :hints (("Goal" :in-theory (enable evntp)))
+  :rule-)
+|#
+
+(defthm evnt-trx1
+  (== (evntp (list P1 'SND P2 'PRUNE TP))
+      (evntp (list P1 'RCV P2 'GRAFT TP)))
+  :hints (("Goal" :in-theory (enable evntp))))
+
+; Pete limit rewriting
+(defthm evnt-trx2
+  (=> (^ (lotp tps)
+         (evntp (list P1 'RCV P2 'CONNECT1 TP)))
+      (evntp (list P1 'SND P2 'CONNECT2 tps)))
+  :hints (("Goal" :in-theory (enable evntp)))
+  :rule-classes ((:rewrite :backchain-limit-lst 1)))
+
+
+; PETE: better rule
+#|
+(defthm assoc-twp-h1
+  (=> (^ (topicp top)
+         (twpp twpm)
+         (not (consp (cdr (assoc-equal top twpm)))))
+      (not (cdr (assoc-equal top twpm))))
+    :hints (("goal" :in-theory (enable twpp))))
+|#
+
+(property assoc-twp-h1 (top :all twpm :twp)
+  (iff (consp (cdr (assoc-equal top twpm)))
+       (cdr (assoc-equal top twpm)))
+  :hints (("goal" :in-theory (enable twpp))))
+
+(definecd update-nbr-topic-state1
+  (nts :nbr-topic-state
+       nbr-scores :peer-rational-map
+       tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map
+       evnt :evnt
+       twpm :twp
+       s :nat)
   :nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map
   :skip-tests t
   :timeout 600
   :ic (is-valid-twp twpm)
+  :body-contracts-hints (("goal" :do-not-induct t
+                          :in-theory (enable evntp twpp wpp)
+                          ))
   (b* ((topic-subs (nbr-topic-state-nbr-topicsubs nts))
        (topic-meshes (nbr-topic-state-topic-mesh nts))
-       (nbrs (acl2s::flatten (acl2::alist-vals topic-subs)))
-       (mesh-nbrs (acl2s::flatten (acl2::alist-vals topic-meshes))))
-    (case-match evnt
+       (mesh-nbrs (reduce* subscribers nil topic-meshes))
+       (defaultres (list nts nil tcmap gcmap nbr-scores)))
+    (match evnt
       ((& 'RCV nbr 'SUB topic)
        (list (update-nbr-topicsubs
               nts
@@ -639,52 +645,68 @@
               (rem-sub topic-subs nbr topic)))
             (wp (cdr (assoc-equal topic twpm)))
             (params (cdr wp))
-            ((when (null params)) (list nts nil tcmap gcmap nbr-scores)))
-         (if (in nbr mesh-nbrs)
-             (list
-              (update-topic-mesh
-               new-nts
-               (rem-sub topic-meshes nbr topic))
-              nil
-              (retain-mesh-failure-counters
-               tcmap nbr topic (params-meshMessageDeliveriesCap params) (params-meshMessageDeliveriesThreshold params)))
-           (list new-nts nil tcmap gcmap nbr-scores))))
+            ((when (null params)) defaultres)
+            ((when (in nbr mesh-nbrs)) (list
+                                        (update-topic-mesh
+                                         new-nts
+                                         (rem-sub topic-meshes nbr topic))
+                                        nil
+                                        (retain-mesh-failure-counters
+                                         tcmap nbr topic
+                                         (params-meshMessageDeliveriesCap params)
+                                         (params-meshMessageDeliveriesThreshold
+                                          params))
+                                        gcmap
+                                        nbr-scores)))
+         defaultres))
       ;;TODO : need to check for nbr score before grafting, and whether it is
       ;;in BACKOFF
       ;;GRAFT implies SUB, so we also add nbr subscription
       ((p1 'RCV nbr 'GRAFT topic)
        (cond
-        ((not (in topic (topics))) (list nts nil tcmap gcmap nbr-scores)) ;;ignore if not a
-        ;;valid topic
-        ((! (in p1 (cdr (assoc-equal topic topic-subs))))
+        ((^ (in topic (topics))
+            (! (in p1 (cdr (assoc-equal topic topic-subs)))))
          (list nts
+               ;; p1 not subscribed to topic, send PRUNE
                `((,p1 SND ,nbr PRUNE ,topic))
                tcmap gcmap nbr-scores))
-        ((>= 0 (lookup-score nbr nbr-scores))
+        ((^ (in topic (topics))
+            (>= 0 (lookup-score nbr nbr-scores)))
          (list (update-topic-mesh
                 (update-nbr-topicsubs
                  nts
                  (add-sub topic-subs nbr topic))
                 (add-sub topic-meshes nbr topic))
                nil
-               tcmap gcmap nbr-scores))
-        (t (list nts nil tcmap gcmap nbr-scores))))
+               tcmap
+               gcmap
+               nbr-scores))
+        (t defaultres)))
       ((& 'RCV nbr 'PRUNE topic)
        (b* ((wp (cdr (assoc-equal topic twpm)))
             (params (cdr wp))
-            ((when (null params)) (list nts nil tcmap gcmap nbr-scores)))
-         (list
-          (update-topic-mesh
-           nts
-           (rem-sub topic-meshes nbr topic))
-          nil
-          (retain-mesh-failure-counters tcmap nbr topic (params-meshMessageDeliveriesCap params) (params-meshMessageDeliveriesThreshold params)))))
+            ((when (null params)) defaultres))
+         (list (update-topic-mesh
+                nts
+                (rem-sub topic-meshes nbr topic))
+               nil
+               (retain-mesh-failure-counters tcmap
+                                             nbr
+                                             topic
+                                             (params-meshMessageDeliveriesCap
+                                              params)
+                                             (params-meshMessageDeliveriesThreshold
+                                              params))
+               gcmap
+               nbr-scores)))
       ((p1 'SND & 'SUB topic)
        (list (update-nbr-topicsubs
               nts
               (add-sub topic-subs p1 topic))
              nil
-             tcmap gcmap nbr-scores))
+             tcmap
+             gcmap
+             nbr-scores))
       ;;UNSUB implies PRUNE, so we also prune the nbr (topic key removed from mesh map)
       ;;If nbr is not in mesh, then default behaviour
       ;; no need to send PRUNE
@@ -693,24 +715,67 @@
               nts
               (rem-sub topic-subs p1 topic))
              nil
-             tcmap gcmap nbr-scores))
+             tcmap
+             gcmap
+             nbr-scores))
       ;;need to check for nbr score before grafting
       ((& 'SND nbr 'GRAFT topic)
        (list (update-topic-mesh
               nts
               (add-sub topic-meshes nbr topic))
              nil
-             tcmap gcmap nbr-scores))
+             tcmap
+             gcmap
+             nbr-scores))
       ((& 'SND nbr 'PRUNE topic)
        (b* ((wp (cdr (assoc-equal topic twpm)))
             (params (cdr wp))
-            ((when (null params)) (list nts nil tcmap gcmap nbr-scores)))
+            ((when (null params)) defaultres))
          (list (update-topic-mesh
                 nts
                 (rem-sub topic-meshes nbr topic))
                nil
-               (retain-mesh-failure-counters tcmap nbr topic (params-meshMessageDeliveriesCap params) (params-meshMessageDeliveriesThreshold params)))))
-      ((p1 'JOIN tp) (b* ((wp (cdar (assoc-equal tp twpm)))
+               (retain-mesh-failure-counters tcmap
+                                             nbr
+                                             topic
+                                             (params-meshMessageDeliveriesCap
+                                              params)
+                                             (params-meshMessageDeliveriesThreshold
+                                              params))
+               gcmap
+               nbr-scores)))
+      ((self 'RCV p1 'CONNECT1 tps)
+       (list (update-nbr-topicsubs nts (reduce* add-peer-subs topic-subs tps p1))
+             `((,self SND ,p1 CONNECT2 ,(peer-subs topic-subs self)))
+             tcmap
+             gcmap
+             nbr-scores))
+      ((& 'RCV p1 'CONNECT2 tps)
+       (list (update-nbr-topicsubs nts (reduce* add-peer-subs topic-subs tps p1))
+             nil
+             tcmap
+             gcmap
+             nbr-scores))
+      (& defaultres))))
+
+(definecd update-nbr-topic-state2 (nts :nbr-topic-state
+                                       nbr-scores :peer-rational-map
+                                       tcmap :pt-tctrs-map
+                                       gcmap :p-gctrs-map
+                                       evnt :evnt
+                                       twpm :twp
+                                       s :nat)
+  :nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map
+  :skip-tests t
+  :ic (is-valid-twp twpm)
+  :body-contracts-hints (("goal" :do-not-induct t
+                          :in-theory (enable evntp twpp wpp)))
+  (b* ((topic-subs (nbr-topic-state-nbr-topicsubs nts))
+       (topic-meshes (nbr-topic-state-topic-mesh nts))
+       (nbrs (reduce* subscribers nil topic-subs))
+       (defaultres (list nts nil tcmap gcmap nbr-scores)))
+    (match evnt
+      ((p1 'JOIN tp) (b* ((wp (cdr (assoc-equal tp twpm)))
                           (params (cdr wp))
                           ((when (null params)) (list nts nil tcmap gcmap nbr-scores))
                           (d (params-d params))
@@ -723,30 +788,96 @@
                               newmesh)
                              (app
                               (map* mk-grafts
-                                    (flatten-map `((,tp . ,newnbrs))) p1)
+                                    (flatten-topic-lop-map `((,tp . ,newnbrs))) p1)
                               (map* mk-subs
-                                    (flatten-map `((,tp . ,nbrs))) p1))
+                                    (flatten-topic-lop-map `((,tp . ,nbrs))) p1))
                              tcmap gcmap nbr-scores)))
       ((p1 'LEAVE tp) (list (update-topic-mesh
                              (update-nbr-topicsubs nts (rem-sub topic-subs p1 tp))
                              (remove-assoc-equal tp topic-meshes))
                             ;;unsubs imply PRUNE
                             (map* mk-unsubs
-                                  (flatten-map `((,tp . ,nbrs))) p1)
+                                  (flatten-topic-lop-map `((,tp . ,nbrs))) p1)
                             tcmap gcmap nbr-scores))
-      ((self 'RCV p1 'CONNECT1 tps)
-       (list (update-nbr-topicsubs nts (reduce* add-peer-subs topic-subs tps p1))
-             `((,self SND ,p1 CONNECT2 ,(peer-subs topic-subs self)))
-             tcmap gcmap nbr-scores))
-      ((& 'RCV p1 'CONNECT2 tps)
-       (list (update-nbr-topicsubs nts (reduce* add-peer-subs topic-subs tps p1))
-             nil
-             tcmap gcmap nbr-scores))
-      ;;for nbrs pruned by low score, need to send PRUNE messages
+      (& defaultres))))
+
+(defthm twp-dlow-int
+  (=> (^ (twpp twpm) twpm)
+      (INTEGERP (G :DLOW (CDDR (CAR TWPM)))))
+  :hints (("Goal" :in-theory (enable twpp paramsp))))
+
+(defthm twp-MESHMESSAGEDELIVERIESCAP-nat
+  (=> (^ (twpp twpm) twpm)
+      (ACL2-NUMBERP (G :MESHMESSAGEDELIVERIESCAP (CDDR (CAR TWPM)))))
+  :hints (("Goal" :in-theory (enable twpp paramsp))))
+
+(defthm twp-cddar-paramsp
+  (=> (^ (twpp twpm) twpm)
+      (PARAMSP (CDDR (CAR TWPM))))
+  :hints (("Goal" :in-theory (enable twpp))))
+
+(defthm dlow-number
+  (=> (^ (twpp twpm) twpm)
+      (ACL2-NUMBERP (G :D (CDDR (CAR TWPM)))))
+  :hints (("Goal" :in-theory (enable twpp paramsp))))
+
+(defthm dlow-lt-d-twp
+  (=> (^ (twpp twpm)
+         (is-valid-twp twpm)
+         (ACL2-NUMBERP (G :D (CDDR (CAR TWPM)))))
+      (<= (G :DLOW (CDDR (CAR TWPM)))
+          (G :D (CDDR (CAR TWPM)))))
+  :hints (("Goal" :in-theory (enable is-valid-twp wpp paramsp))))
+
+(defthm d-lt-dhigh-twp
+  (=> (^ (twpp twpm)
+         (is-valid-twp twpm)
+         (ACL2-NUMBERP (G :D (CDDR (CAR TWPM)))))
+      (<= (g :d (cddr (car twpm)))
+          (g :dhigh (cddr (car twpm)))))
+  :hints (("Goal" :in-theory (enable is-valid-twp wpp paramsp))))
+
+(defthm mmdt-lt-mmdc-twp
+  (=> (^ (twpp twpm)
+         (is-valid-twp twpm)
+         (ACL2-NUMBERP (G :D (CDDR (CAR TWPM)))))
+      (<= (g :meshmessagedeliveriesthreshold (cddr (car twpm)))
+          (g :meshmessagedeliveriescap (cddr (car twpm)))))
+  :hints (("Goal" :in-theory (enable is-valid-twp wpp paramsp))))
+
+(defthm dlow-gt-0-twp
+  (=> (^ (twpp twpm)
+         (is-valid-twp twpm)
+         (ACL2-NUMBERP (G :D (CDDR (CAR TWPM)))))
+      (<= 0 (G :DLOW (CDDR (CAR TWPM)))))
+  :hints (("Goal" :in-theory (enable is-valid-twp wpp paramsp))))
+
+(property cons-twpm (twpm :twp)
+  (=> (consp twpm)
+      (wpp (cdar twpm)))
+  :hints (("Goal" :in-theory (enable twpp))))
+
+(definecd update-nbr-topic-state3 (nts :nbr-topic-state
+                                       nbr-scores :peer-rational-map
+                                       tcmap :pt-tctrs-map
+                                       gcmap :p-gctrs-map
+                                       evnt :evnt
+                                       twpm :twp
+                                       s :nat)
+  :nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map
+  :skip-tests t
+  :timeout 60
+  :ic (is-valid-twp twpm)
+  :body-contracts-hints (("Goal" :DO-NOT-INDUCT T
+                          :in-theory (enable evntp twpp wpp)))
+  (b* ((topic-subs (nbr-topic-state-nbr-topicsubs nts))
+       (topic-meshes (nbr-topic-state-topic-mesh nts))
+       (mesh-nbrs (reduce* subscribers nil topic-meshes))
+       (defaultres (list nts nil tcmap gcmap nbr-scores)))
+    (match evnt
       ((p1 'HBM elapsed) (b* ((wp (cdar twpm))
                               (params (cdr wp))
-                              ((when (null params)) (list nts nil tcmap gcmap
-                                                          nbr-scores))
+                              ((when (null params)) defaultres)
                               (nbr-scores (calc-nbr-scores-map tcmap gcmap twpm))
                               (remvd (strip-cars (filter* lt-0-filter
                                                           nbr-scores)))
@@ -770,19 +901,21 @@
                               ;; new peers to be added in the mesh will come
                               ;; from the map of topic-subs\disqualified-nbrs
                               (mesh3 (add-mesh-nbrs mesh2
-                                                    (rem-vals topic-subs
-                                                              disqualified-mesh-nbrs)
+                                                    (rem-peers-topic-lop-map topic-subs
+                                                                             disqualified-mesh-nbrs)
                                                     (params-dlow params)
                                                     (params-d params)))
                               ;;topic-peer alist which is to be pruned
                               (tps-rem (app (filter* remvd-topic-nbr
-                                                     (flatten-map topic-meshes)
-                                                     remvd)   ;;score
-                                            (flatten-map (map-diff mesh1
-                                                                   mesh2)))) ;;extras
+                                                     (flatten-topic-lop-map topic-meshes)
+                                                     remvd) ;; score
+                                            (set-difference-equal
+                                             (flatten-topic-lop-map mesh1)
+                                             (flatten-topic-lop-map mesh2)))) ;;extras
                               ;;topic-peer alist which is to be grafted
-                              (tps-gr (flatten-map (map-diff mesh3
-                                                             mesh2)))
+                              (tps-gr (set-difference-equal
+                                       (flatten-topic-lop-map mesh3)
+                                       (flatten-topic-lop-map mesh2)))
                               (newnts (update-topic-mesh nts mesh3))
                               (newnts (fanout-maintenance newnts
                                                           topic-subs
@@ -793,7 +926,7 @@
                            (list newnts
                                  (app (map* mk-prunes tps-rem p1)
                                       (map* mk-grafts tps-gr p1)
-                                      (opportunistic-grafting-topics
+                                      (opportunistic-grafting
                                        p1
                                        (strip-cars topic-meshes)
                                        nts 
@@ -801,8 +934,100 @@
                                        params))
                                  (update-mesh-times-counters
                                   tcmap
-                                  (flatten-map topic-meshes)
+                                  (flatten-topic-lop-map topic-meshes)
                                   elapsed)
                                  gcmap
                                  nbr-scores)))
-      (& (list nts nil tcmap gcmap nbr-scores))))))
+      (& defaultres))))
+
+;; Broke this huge function into 3 smaller functions
+(definecd update-nbr-topic-state (nts :nbr-topic-state nbr-scores
+                                      :peer-rational-map tcmap :pt-tctrs-map
+                                      gcmap :p-gctrs-map evnt :evnt twpm :twp s
+                                      :nat)
+  :nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map
+  :skip-tests t
+  :ic (is-valid-twp twpm)
+  :body-contracts-hints (("Goal" :DO-NOT-INDUCT T
+                          :in-theory (enable evntp twpp wpp)))
+  ;;add all components here
+  (cond
+   ((in (second evnt) '(RCV SND))
+    (update-nbr-topic-state1 nts nbr-scores tcmap gcmap evnt twpm s))
+   ((in (second evnt) '(JOIN LEAVE))
+    (update-nbr-topic-state2 nts nbr-scores tcmap gcmap evnt twpm s))
+   (t (update-nbr-topic-state3 nts nbr-scores tcmap gcmap evnt twpm s))))
+
+
+(property
+  nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map-check
+  (x :nbr-topic-stateloevpt-tctrs-mapp-gctrs-mappeer-rational-map)
+  (^ (nbr-topic-statep (first x))
+     (loevp (second x))
+     (pt-tctrs-mapp (third x))
+     (p-gctrs-mapp (fourth x))
+     (peer-rational-mapp (fifth x))))
+
+(property first-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (nbr-topic-statep (first (update-nbr-topic-state nts nbr-scores tcmap
+                                                   gcmap evnt twpm s)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property second-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (loevp (second (update-nbr-topic-state nts nbr-scores tcmap
+                                         gcmap evnt twpm s)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property third-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (pt-tctrs-mapp (third (update-nbr-topic-state nts nbr-scores tcmap
+                                                gcmap evnt twpm s)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property fourth-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (p-gctrs-mapp (fourth (update-nbr-topic-state nts nbr-scores tcmap
+                                                gcmap evnt twpm s)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property fifth-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (peer-rational-mapp (fifth (update-nbr-topic-state nts nbr-scores tcmap
+                                                     gcmap evnt twpm s)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property bind-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (b* (((list a b c d e) (update-nbr-topic-state nts nbr-scores tcmap
+                                                 gcmap evnt twpm s)))
+    (^ (nbr-topic-statep a)
+       (loevp b)
+       (pt-tctrs-mapp c)
+       (p-gctrs-mapp d)
+       (peer-rational-mapp e))))
