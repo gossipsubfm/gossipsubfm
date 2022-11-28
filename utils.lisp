@@ -5,8 +5,7 @@
 (defdata lor (listof rational))
 (defdata lon (listof nat))
 
-
-(definecd map-diff (m1 :lol m2 :lol) :lol
+(definecd map-diff (m1 m2 :lol) :lol
   (match (list m1 m2)
     ((() &) '())
     ((& ()) '())
@@ -15,7 +14,7 @@
            (map-diff rst1 rst2)))
     (& nil)))
 
-(definec <<= (x :all y :all) :bool
+(definec <<= (x y :all) :bool
   (or (== x y)
       (<< x y)))
 
@@ -31,17 +30,15 @@
     (() ())
     ((e . es) (insert e (isort es)))))
 
-
 (definec natlist (n :nat) :nat-list
   (if (zp n)
       '()
     (cons n (natlist (1- n)))))
 
-(definec natlist-from (i :nat n :nat) :nat-list
+(definec natlist-from (i n :nat) :nat-list
   (if (zp n)
       '()
     (cons i (natlist-from (1+ i) (1- n)))))
-
 
 (definec grab (n :nat x :tl) :tl
   (if (or (zp n) (endp x))
@@ -50,26 +47,25 @@
 
 (defthm mvnth2mymvnth
   (=> (^ (posp k) (natp s))
-      (natp (mv-nth 0 (DEFDATA::GENRANDOM-SEED k s))))
-  :hints (("Goal" :use (:instance DEFDATA::MV-NTH--TO--MY-MV-NTH
-     (defdata::x 0) (defdata::y (DEFDATA::GENRANDOM-SEED k s))))))
+      (natp (mv-nth 0 (defdata::genrandom-seed k s))))
+  :hints (("goal" :use (:instance defdata::mv-nth--to--my-mv-nth
+                                  (defdata::x 0) (defdata::y (defdata::genrandom-seed k s))))))
 
 (defthm mvnth2mymvnth1
   (=> (^ (posp k) (natp s))
-      (natp (mv-nth 1 (DEFDATA::GENRANDOM-SEED k s))))
-  :hints (("Goal" :use (:instance DEFDATA::MV-NTH--TO--MY-MV-NTH
-                                  (defdata::x 0) (defdata::y (DEFDATA::GENRANDOM-SEED k s))))))
+      (natp (mv-nth 1 (defdata::genrandom-seed k s))))
+  :hints (("goal" :use (:instance defdata::mv-nth--to--my-mv-nth
+                                  (defdata::x 0) (defdata::y (defdata::genrandom-seed k s))))))
 
 (definec shuffle (ls :tl s :nat) :tl
   (b* (((mv k s) (defdata::genrandom-seed
-		   (1- (expt 2 31))
-		   (mod s (expt 2 31))))
+                   (1- (expt 2 31))
+                   (mod s (expt 2 31))))
        (i (mod k 2)))
     (match (list ls i)
       ((() &) ())
       (((l . rst) 0) (cons l (shuffle rst s)))
       (((l . rst) 1) (app (shuffle rst s) (list l))))))
-
 
 (definecd rem-vals (al :lol rl :tl) :alist
   (match al
@@ -79,17 +75,14 @@
            (rem-vals rst rl)))
     (& nil)))
 
-
-
 (property isort-lor (ls :lor)
-          (lorp (isort ls)))
+  (lorp (isort ls)))
 
 (property isort-cons (ls :lor)
-          (=> (consp ls)
-              (consp (isort ls))))
+  (=> (consp ls)
+      (consp (isort ls))))
 
-
-(definecd median-help (xs :lor ys :lor) :rational
+(definecd median-help (xs ys :lor) :rational
   :ic (consp xs)
   (cond
    ((= (len xs) (1+ (len ys))) (car xs))
@@ -97,11 +90,9 @@
    ((< (len xs) (len ys)) 0)
    (t (median-help (cdr xs) `(,(car xs) . ,ys)))))
 
-
 (definecd median (ls :lor) :rational
   :ic (consp ls)
   (median-help (isort ls) '()))
-
 
 (definecd extract-keys (keys :tl al :alist) :alist
   (match al
