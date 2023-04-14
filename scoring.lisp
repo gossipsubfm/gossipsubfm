@@ -47,8 +47,8 @@
 ; '(BLOCKS MESSAGES))
   ;; sample topics 
 ; FM SE SEC DS PL PS NT))
-  ;; topics in ETH-2.0
-  '(BLOCKS AGG SUB1 SUB2 SUB3))  
+  ;; topics in ETH-2.0, has to be in ascending order because we construct maps
+  '(AGG BLOCKS SUB1 SUB2 SUB3))  
 
 (definec nth-topic-custom (n :nat) :symbol
   (nth (mod n (len (topics))) (topics)))
@@ -70,100 +70,115 @@
           (firstMessageDeliveries   . non-neg-rational)
           (meshFailurePenalty       . non-neg-rational)))
 
-(property tctrs-check2 (tc :tctrs)
-  (^ (non-neg-rationalp (g :meshtime tc))
-     (non-neg-rationalp (g :meshfailurepenalty tc))
-     (non-neg-rationalp (g :firstmessagedeliveries tc))
-     (non-neg-rationalp (g :invalidmessagedeliveries tc))
-     (non-neg-rationalp (g :meshmessagedeliveries tc)))
-  :rule-classes :forward-chaining)
+(property tctrs-check3 (tc :tctrs)
+  (^ (<= 0 (mget :meshtime tc))
+     (<= 0 (mget :meshfailurepenalty tc))
+     (<= 0 (mget :firstmessagedeliveries tc))
+     (<= 0 (mget :invalidmessagedeliveries tc))
+     (<= 0 (mget :meshmessagedeliveries tc)))
+  :hints (("goal" :in-theory (enable tctrsp)))
+  :rule-classes :linear)
 
 (definecd new-tctrs () :tctrs
   (tctrs 0 0 0 0 0))
 
-(defdata pt (cons peer topic))
 ;; pt-tctrs-map keeps track of tctrs per peer per topic
-(defdata pt-tctrs-map (alistof pt tctrs))
+(defdata pt (cons peer topic))
+(defdata lopt (listof pt))
 
-(defun pt-tctrs-topic (peer tops n)
+;; Pete: try making this into a map and use mget/ mset instead and do
+;; this for all similar alistof types.
+(defdata pt-tctrs-map (map pt tctrs))
+
+
+(defun pt-tctrs-topic (peer tops n acc)
   (if (endp tops)
-      '()
-    (cons `((,peer . ,(car tops)) . ,(nth-tctrs n))
-          (pt-tctrs-topic peer (cdr tops) (1+ n)))))
+      acc
+    (pt-tctrs-topic peer
+                    (cdr tops)
+                    (1+ n)
+                    (mset (cons peer (car tops))
+                          (nth-tctrs n)
+                          acc))))
 
-(defun mk-ptc (tops peers n)
+(defun mk-ptc (tops peers n acc)
   (if (endp peers)
-      '()
-    (app (pt-tctrs-topic (car peers) tops n)
-         (mk-ptc tops (cdr peers) (+ (* (len peers) (len (topics))) n)))))
+      acc
+    (mk-ptc tops (cdr peers) (+ (* (len peers) (len (topics))) n)
+            (pt-tctrs-topic (car peers) tops n acc))))
 
 (defun nth-pt-tctrs-map-custom (n)
-  (mk-ptc (topics) (map* mk-peers (natlist-from n 3)) n))
+  (mk-ptc (topics) (map* mk-peers (natlist-from n 3)) n nil))
+
+(property mk-ptc-pt-tctrs-mapp (n :nat)
+          :proofs? nil
+          :check-contracts? nil
+          (pt-tctrs-mapp (nth-pt-tctrs-map-custom n)))
 
 (defdata-attach pt-tctrs-map :enumerator
   nth-pt-tctrs-map-custom)
 
 ;; Global counters : counters across all topics
 ;; P5, P6 and P7
-(defdata gctrs (list rational non-neg-rational non-neg-rational))
+(defdata gctrs
+  (record (apco . rational)
+          (ipco . non-neg-rational)
+          (bhvo . non-neg-rational)))
 
-(property gctrs-check (x :gctrs)
-  (^ (lorp x)
-     (rationalp (first x))
-     (non-neg-rationalp (second x))
-     (non-neg-rationalp (third x)))
-  :hints (("goal" :in-theory (enable non-neg-rationalp gctrsp)))
-  :rule-classes :forward-chaining)
+(property gctrs-check3 (gc :gctrs)
+  (^ (<= 0 (mget :ipco gc))
+     (<= 0 (mget :bhvo gc)))
+  :hints (("goal" :in-theory (enable gctrsp)))
+  :rule-classes :linear)
 
-(in-theory (disable gctrsp neg-rationalp non-neg-rationalp))
+(definecd new-gctrs () :gctrs
+  (gctrs 0 0 0))
 
 ;; Unlike tctrs, P5, P6 and P7 are only per-peer
-(defdata p-gctrs-map (alistof peer gctrs))
+(defdata p-gctrs-map (map peer gctrs))
 
-(defun mk-pc (peers n)
+(defun mk-pc (peers n acc)
   (if (endp peers)
-      '()
-    (cons (cons (car peers) (nth-gctrs n))
-          (mk-pc (cdr peers) (+ n 1)))))
+      acc
+    (mk-pc (cdr peers) (+ n 1) (mset (car peers) (nth-gctrs n) acc))))
 
 (defun nth-p-gctrs-map-custom (n)
-  (mk-pc (map* mk-peers (natlist-from n 3)) n))
+  (mk-pc (map* mk-peers (natlist-from n 3)) n nil))
 
 (defdata-attach p-gctrs-map :enumerator nth-p-gctrs-map-custom)
 
 ;;maps Peers -> Scores
-(defdata peer-rational-map (alistof peer rational))
+(defdata peer-rational-map (map peer rational))
 
 ;; functions to affect change in individual tctrs.
 ;; multiple tctrs can be updated by function composition.
-  
 (definecd update-invalidMessageDeliveries
   (tctrs :tctrs invalidMessageDeliveries :non-neg-rational) :tctrs
-  (s :invalidMessageDeliveries invalidMessageDeliveries tctrs))
+  (mset :invalidMessageDeliveries invalidMessageDeliveries tctrs))
 
 (definecd increment-invalidMessageDeliveries (cs :tctrs) :tctrs
   (update-invalidMessageDeliveries cs (+ 1 (tctrs-invalidMessageDeliveries cs))))
 
 (definecd update-meshMessageDeliveries
   (tctrs :tctrs meshMessageDeliveries :non-neg-rational) :tctrs
-  (s :meshMessageDeliveries meshMessageDeliveries tctrs))
+  (mset :meshMessageDeliveries meshMessageDeliveries tctrs))
 
 (definecd increment-meshMessageDeliveries (cs :tctrs) :tctrs
   (update-meshMessageDeliveries cs (+ 1 (tctrs-meshMessageDeliveries cs))))
 
 (definecd update-meshTime (tctrs :tctrs meshTime :non-neg-rational) :tctrs
-  (s :meshTime meshTime tctrs))
+  (mset :meshTime meshTime tctrs))
 
 (definecd update-firstMessageDeliveries
   (tctrs :tctrs firstMessageDeliveries :non-neg-rational) :tctrs
-  (s :firstMessageDeliveries firstMessageDeliveries tctrs))
+  (mset :firstMessageDeliveries firstMessageDeliveries tctrs))
 
 (definecd increment-firstMessageDeliveries (cs :tctrs) :tctrs
   (update-firstMessageDeliveries cs (+ 1 (tctrs-firstMessageDeliveries cs))))
 
 (definecd update-meshFailurePenalty
   (tctrs :tctrs meshFailurePenalty :non-neg-rational) :tctrs
-  (s :meshFailurePenalty meshFailurePenalty tctrs))
+  (mset :meshFailurePenalty meshFailurePenalty tctrs))
 
 (definecd increment-meshFailurePenalty (cs :tctrs) :tctrs
   (update-meshFailurePenalty cs (+ 1 (tctrs-meshFailurePenalty cs))))
@@ -173,8 +188,8 @@
           (meshTimeQuantum                  . pos)
           (p2cap                            . nat)
           (timeQuantaInMeshCap              . nat)
-          (meshMessageDeliveriesCap         . nat)
-          (meshMessageDeliveriesThreshold   . nat)
+          (meshMessageDeliveriesCap         . pos-rational)
+          (meshMessageDeliveriesThreshold   . pos-rational)
           (topiccap                         . rational)
           ;;^^  NOTE - this is actually global, needs to be same across topics.
           (grayListThreshold                . rational)
@@ -197,160 +212,85 @@
           (decayToZero                      . frac)
           (decayInterval                    . pos-rational)))
 
-
-; The records book we use has a loop-stopper that makes it hard to
-; determine how msets are rewritten, so I wrote a small book to adjust
-; that and now it is part of defdata.
-
-#|
-
-
-(defthm params-check
-  (== (paramsp
-       (s :0tag 'params
-                   (mset
-                    :activationwindow
-                    var-params-activationwindow
-                    (mset
-                     :meshtimequantum
-                     var-params-meshtimequantum
-                     (mset
-                      :p2cap var-params-p2cap
-                      (mset
-                       :timequantainmeshcap
-                       var-params-timequantainmeshcap
-                       (mset
-                        :meshmessagedeliveriescap
-                        var-params-meshmessagedeliveriescap
-                        (mset
-                         :meshmessagedeliveriesthreshold
-                         var-params-meshmessagedeliveriesthreshold
-                         (mset
-                          :topiccap var-params-topiccap
-                          (mset
-                           :graylistthreshold
-                           var-params-graylistthreshold
-                           (mset
-                            :d var-params-d
-                            (mset
-                             :dlow var-params-dlow
-                             (mset
-                              :dhigh var-params-dhigh
-                              (mset
-                               :dlazy var-params-dlazy
-                               (mset
-                                :hbminterval var-params-hbminterval
-                                (mset
-                                 :fanoutttl var-params-fanoutttl
-                                 (mset
-                                  :mcachelen var-params-mcachelen
-                                  (mset
-                                   :mcachegsp var-params-mcachegsp
-                                   (mset
-                                    :seenttl var-params-seenttl
-                                    (mset
-                                     :opportunisticgraftthreshold
-                                     var-params-opportunisticgraftthreshold
-                                     (mset
-                                      :topicweight var-params-topicweight
-                                      (mset
-                                       :meshmessagedeliveriesdecay
-                                       var-params-meshmessagedeliveriesdecay
-                                       (mset
-                                        :firstmessagedeliveriesdecay
-                                        var-params-firstmessagedeliveriesdecay
-                                        (mset
-                                         :behaviourpenaltydecay
-                                         var-params-behaviourpenaltydecay
-                                         (mset
-                                          :meshfailurepenaltydecay
-                                          var-params-meshfailurepenaltydecay
-                                          (mset
-                                           :invalidmessagedeliveriesdecay
-                                           var-params-invalidmessagedeliveriesdecay
-                                           (mset
-                                            :decaytozero
-                                            var-params-decaytozero
-                                            (mset
-                                              :decayinterval
-                                              var-params-decayinterval
-                                              nil))))))))))))))))))))))))))))
-      (^ (natp var-params-meshmessagedeliveriescap)
-         (natp var-params-meshmessagedeliveriesthreshold)
-         (pos-rationalp var-params-decayinterval)
-         (natp var-params-activationwindow)
-         (posp var-params-meshtimequantum)
-         (natp var-params-p2cap)
-         (natp var-params-timequantainmeshcap)
-         (rationalp var-params-topiccap)
-         (rationalp var-params-graylistthreshold)
-         (natp var-params-d)
-         (natp var-params-dlow)
-         (natp var-params-dhigh)
-         (natp var-params-dlazy)
-         (pos-rationalp var-params-hbminterval)
-         (pos-rationalp var-params-fanoutttl)
-         (posp var-params-mcachelen)
-         (non-neg-rationalp var-params-mcachegsp)
-         (non-neg-rationalp var-params-seenttl)
-         (non-neg-rationalp var-params-opportunisticgraftthreshold)
-         (non-neg-rationalp var-params-topicweight)
-         (fracp var-params-meshmessagedeliveriesdecay)
-         (fracp var-params-firstmessagedeliveriesdecay)
-         (fracp var-params-behaviourpenaltydecay)
-         (fracp var-params-meshfailurepenaltydecay)
-         (fracp var-params-invalidmessagedeliveriesdecay)
-         (fracp var-params-decaytozero)))
-  :hints (("goal" :in-theory (enable paramsp))))
+(defdata params-legal
+  (record (activationWindow                 . nat)
+          (meshTimeQuantum                  . pos)
+          (p2cap                            . nat)
+          (timeQuantaInMeshCap              . nat)
+          (meshMessageDeliveriesCap         . pos-rational)
+          (meshMessageDeliveriesThreshold   . pos-rational)
+          (topiccap                         . rational)
+          ;;^^  NOTE - this is actually global, needs to be same across topics.
+          (grayListThreshold                . rational)
+          (d                                . nat)
+          (dlow                             . nat)
+          (dhigh                            . nat)
+          (dlazy                            . nat)
+          (hbmInterval                      . pos-rational)
+          (fanoutTTL                        . pos-rational)
+          (mcacheLen                        . pos)
+          (mcacheGsp                        . non-neg-rational)
+          (seenTTL                          . non-neg-rational)
+          (opportunisticGraftThreshold      . non-neg-rational)
+          (topicWeight                      . non-neg-rational)
+          (meshMessageDeliveriesDecay       . frac)
+          (firstMessageDeliveriesDecay      . frac)
+          (behaviourPenaltyDecay            . frac)
+          (meshFailurePenaltyDecay          . frac)
+          (invalidMessageDeliveriesDecay    . frac)
+          (decayToZero                      . frac)
+          (decayInterval                    . pos-rational)))
 
 (property params-check2 (x :params)
-          (^ (natp (params-meshmessagedeliveriescap x))
-             (natp (params-meshmessagedeliveriesthreshold x))
-             (pos-rationalp (params-decayinterval x))
-             (natp (params-activationwindow x))
-             (posp (params-meshtimequantum x))
-             (natp (params-p2cap x))
-             (natp (params-timequantainmeshcap x))
-             (rationalp (params-topiccap x))
-             (rationalp (params-graylistthreshold x))
-             (natp (params-d x))
-             (natp (params-dlow x))
-             (natp (params-dhigh x))
-             (natp (params-dlazy x))
-             (pos-rationalp (params-hbminterval x))
-             (pos-rationalp (params-fanoutttl x))
-             (posp (params-mcachelen x))
-             (non-neg-rationalp (params-mcachegsp x))
-             (non-neg-rationalp (params-seenttl x))
-             (non-neg-rationalp (params-opportunisticgraftthreshold x))
-             (non-neg-rationalp (params-topicweight x))
-             (fracp (params-meshmessagedeliveriesdecay x))
-             (fracp (params-firstmessagedeliveriesdecay x))
-             (fracp (params-behaviourpenaltydecay x))
-             (fracp (params-meshfailurepenaltydecay x))
-             (fracp (params-invalidmessagedeliveriesdecay x))
-             (fracp (params-decaytozero x)))
+          (^ (pos-rationalp (mget :meshmessagedeliveriescap x))
+             (pos-rationalp (mget :meshmessagedeliveriesthreshold x))
+             (pos-rationalp (mget :decayinterval x))
+             (natp (mget :activationwindow x))
+             (posp (mget :meshtimequantum x))
+             (natp (mget :p2cap x))
+             (natp (mget :timequantainmeshcap x))
+             (rationalp (mget :topiccap x))
+             (rationalp (mget :graylistthreshold x))
+             (natp (mget :d x))
+             (natp (mget :dlow x))
+             (natp (mget :dhigh x))
+             (natp (mget :dlazy x))
+             (pos-rationalp (mget :hbminterval x))
+             (pos-rationalp (mget :fanoutttl x))
+             (posp (mget :mcachelen x))
+             (non-neg-rationalp (mget :mcachegsp x))
+             (non-neg-rationalp (mget :seenttl x))
+             (non-neg-rationalp (mget :opportunisticgraftthreshold x))
+             (non-neg-rationalp (mget :topicweight x))
+             (fracp (mget :meshmessagedeliveriesdecay x))
+             (fracp (mget :firstmessagedeliveriesdecay x))
+             (fracp (mget :behaviourpenaltydecay x))
+             (fracp (mget :meshfailurepenaltydecay x))
+             (fracp (mget :invalidmessagedeliveriesdecay x))
+             (fracp (mget :decaytozero x)))
           :rule-classes :forward-chaining)
-|#
           
-
 (defdata weights
-  (list non-neg-rational non-neg-rational non-pos-rational
-        non-pos-rational neg-rational non-neg-rational
-        neg-rational neg-rational))
+  (record (w1 . non-neg-rational)
+          (w2 . non-neg-rational)
+          (w3 . non-pos-rational)
+          (w3b . non-pos-rational)
+          (w4 . neg-rational)
+          (w5 . non-neg-rational)
+          (w6 . neg-rational)
+          (w7 . neg-rational)))
 
-(property weights-check (ws :weights)
-  (^ (tlp ws)
-     (equal 8 (len ws))
-     (non-neg-rationalp (first ws))
-     (non-neg-rationalp (second ws))
-     (non-pos-rationalp (third ws))
-     (non-pos-rationalp (fourth ws))
-     (neg-rationalp (fifth ws))
-     (non-neg-rationalp (sixth ws))
-     (neg-rationalp (seventh ws))
-     (neg-rationalp (eighth ws)))
-  :rule-classes ((:forward-chaining :trigger-terms ((weightsp ws)))))
+(property weights-check3 (ws :weights)
+  (^ (<= 0 (mget :w1 ws))
+     (<= 0 (mget :w2 ws))
+     (>= 0 (mget :w3 ws))
+     (>= 0 (mget :w3b ws))
+     (> 0 (mget :w4 ws))
+     (<= 0 (mget :w5 ws))
+     (> 0 (mget :w6 ws))
+     (> 0 (mget :w7 ws)))
+  :hints (("goal" :in-theory (enable weightsp)))
+  :rule-classes :linear)
 
 ;; both weights and params are indexed by topic
 (defdata wp (cons weights params))
@@ -360,12 +300,9 @@
      (paramsp (cdr x)))
   :rule-classes :forward-chaining)
 
-(defdata twp (alistof topic wp))
+(defdata twp (map topic wp))
 (defdata maybe-wp (or nil wp))
 (defdata niltype nil)
-
-(sig assoc-equal (:a (alistof :a :b)) => (v (cons :a :b) niltype))
-(sig put-assoc-equal (:a :b (alistof :a :b)) => (alistof :a :b))
 
 ;; weights, params and wp are huge data structures,
 ;; so we disable their definitions to speed up theorem proving
@@ -376,15 +313,15 @@
      (let ((params (cddar twp)))
        (^ (weightsp (cadar twp))
           (paramsp params)
-          (>= (params-meshMessageDeliveriesCap params)
-              (params-meshMessageDeliveriesThreshold params))
-          (<= (params-dlow params) (params-d params))
-          (>= (params-dhigh params) (params-d params))
-          (>= (params-decayInterval params) 1)                
+          (>= (mget :meshMessageDeliveriesCap params)
+              (mget :meshMessageDeliveriesThreshold params))
+          (<= (mget :dlow params) (mget :d params))
+          (>= (mget :dhigh params) (mget :d params))
+          (>= (mget :decayInterval params) 1)                
           (is-valid-twp (cdr twp))))))
 
-(property assoc-twp (top :topic twpm :twp)
-  (let ((x (cdr (assoc-equal top twpm))))
+(property mget-twp (top :topic twpm :twp)
+  (let ((x (mget top twpm)))
     (=> x
         (^ (wpp x)
            (weightsp (car x))
@@ -392,28 +329,28 @@
           
 (property lookup-twpm-check2 (top :topic twpm :twp)
   :check-contracts? nil
-  (b* ((x (cdr (assoc-equal top twpm)))
+  (b* ((x (mget top twpm))
        (ps (cdr x)))
     (=> (^ (is-valid-twp twpm) x)
-        (<= (g :meshmessagedeliveriesthreshold ps)
-            (g :meshmessagedeliveriescap ps))))
-  :hints (("goal" :in-theory (enable is-valid-twp paramsp))))
+        (<= (mget :meshmessagedeliveriesthreshold ps)
+            (mget :meshmessagedeliveriescap ps))))
+  :hints (("goal" :in-theory (enable is-valid-twp mget))))
 
 (property lookup-twpm-check3 (top :topic twpm :twp)
   :check-contracts? nil
-  (b* ((x (cdr (assoc-equal top twpm)))
+  (b* ((x (mget top twpm))
        (ps (cdr x)))
     (=> (^ (is-valid-twp twpm) x)
-        (<= (g :dlow ps)
-            (g :d ps))))
-  :hints (("goal" :in-theory (enable is-valid-twp paramsp))))
+        (<= (mget :dlow ps)
+            (mget :d ps))))
+  :hints (("goal" :in-theory (enable is-valid-twp mget))))
 
 (property lookup-twpm-check4 (twpm :twp)
   :check-contracts? nil
   (=> (is-valid-twp twpm)
-      (<= (g :dlow (cddr (car twpm)))
-          (g :d (cddr (car twpm)))))
-  :hints (("goal" :in-theory (enable is-valid-twp paramsp))))
+      (<= (mget :dlow (cddr (car twpm)))
+          (mget :d (cddr (car twpm)))))
+  :hints (("goal" :in-theory (enable is-valid-twp mget))))
 
 (property car-twpm-check5 (twpm :twp :cons params :all)
   :check-contracts? nil
@@ -446,18 +383,20 @@
 (definecd calc-deficit
   (meshMessageDeliveries :non-neg-rational
                          meshMessageDeliveriesCap 
-                         meshMessageDeliveriesThreshold :nat)  :non-neg-rational
+                         meshMessageDeliveriesThreshold :pos-rational)  :non-neg-rational
   :ic (>= meshMessageDeliveriesCap meshMessageDeliveriesThreshold)
   (b* ((mmd (min meshMessageDeliveries meshMessageDeliveriesCap))
        (deficit (- meshMessageDeliveriesThreshold mmd)))
-    (max deficit 0)))
+    (if (> deficit 0)
+        deficit
+      0)))
 
 (definecd calcP3
   (meshTime :non-neg-rational
             activationWindow :nat
             meshMessageDeliveries :non-neg-rational
             meshMessageDeliveriesCap 
-            meshMessageDeliveriesThreshold :nat) :non-neg-rational
+            meshMessageDeliveriesThreshold :pos-rational) :non-neg-rational
   :ic (>= meshMessageDeliveriesCap meshMessageDeliveriesThreshold)
   (b* ((deficit (calc-deficit meshMessageDeliveries
                               meshMessageDeliveriesCap
@@ -475,7 +414,7 @@
             meshFailurePenalty 
             meshMessageDeliveries :non-neg-rational
             meshMessageDeliveriesCap 
-            meshMessageDeliveriesThreshold :nat) :non-neg-rational
+            meshMessageDeliveriesThreshold :pos-rational) :non-neg-rational
   :ic (>= meshMessageDeliveriesCap meshMessageDeliveriesThreshold)
   (if (and (> meshTime activationWindow)
            (< meshMessageDeliveries meshMessageDeliveriesThreshold))
@@ -486,22 +425,22 @@
     meshFailurePenalty))
   
 (property non-pos-p3-p3b (tctrs :tctrs  wtpm :wp)
-  (=> (<= (g :meshmessagedeliveriesthreshold (cdr wtpm))
-          (g :meshmessagedeliveriescap (cdr wtpm)))
+  (=> (<= (mget :meshmessagedeliveriesthreshold (cdr wtpm))
+          (mget :meshmessagedeliveriescap (cdr wtpm)))
       (>= 0
-          (+ (* (caddr (car wtpm))
+          (+ (* (mget :w3 (car wtpm))
                 (calcp3 (tctrs-meshtime tctrs)
-                        (g :activationwindow (cdr wtpm))
+                        (mget :activationwindow (cdr wtpm))
                         (tctrs-meshmessagedeliveries tctrs)
-                        (g :meshmessagedeliveriescap (cdr wtpm))
-                        (g :meshmessagedeliveriesthreshold (cdr wtpm))))
-             (* (cadddr (car wtpm))
+                        (mget :meshmessagedeliveriescap (cdr wtpm))
+                        (mget :meshmessagedeliveriesthreshold (cdr wtpm))))
+             (* (mget :w3b (car wtpm))
                 (calcp3b (tctrs-meshtime tctrs)
-                         (g :activationwindow (cdr wtpm))
+                         (mget :activationwindow (cdr wtpm))
                          (tctrs-meshfailurepenalty tctrs)
                          (tctrs-meshmessagedeliveries tctrs)
-                         (g :meshmessagedeliveriescap (cdr wtpm))
-                         (g :meshmessagedeliveriesthreshold (cdr wtpm)))))))
+                         (mget :meshmessagedeliveriescap (cdr wtpm))
+                         (mget :meshmessagedeliveriesthreshold (cdr wtpm)))))))
   :hints (("Goal" :in-theory (enable twpp wpp weightsp))))
 
 (definecd calcP4
@@ -520,43 +459,42 @@
   (b* ((weights (car wtpm))
        (params (cdr wtpm)))
     (* (params-topicweight params)
-       (+ (* (first weights)
+       (+ (* (mget :w1 weights)
              (calcP1 (tctrs-meshTime tctrs)
                      (params-meshTimeQuantum params)
                      (params-timeQuantaInMeshCap params)))
-          (* (second weights)
+          (* (mget :w2 weights)
              (calcP2 (tctrs-firstMessageDeliveries tctrs) (params-p2cap params)))
-          (* (third weights)
+          (* (mget :w3 weights)
              (calcP3 (tctrs-meshTime tctrs) (params-activationWindow params) 
                      (tctrs-meshMessageDeliveries tctrs) (params-meshMessageDeliveriesCap params)
                      (params-meshMessageDeliveriesThreshold params)))
-          (* (fourth weights)
+          (* (mget :w3b weights)
              (calcP3b (tctrs-meshTime tctrs) (params-activationWindow params)
                       (tctrs-meshFailurePenalty tctrs) (tctrs-meshMessageDeliveries
                                                         tctrs)
                       (params-meshMessageDeliveriesCap params) (params-meshMessageDeliveriesThreshold params)))
-          (* (fifth weights)
+          (* (mget :w4 weights)
              (calcP4 (tctrs-invalidMessageDeliveries tctrs)))
           ))))
 
 (property max-helper2 (tctrs :tctrs wtpm :wp)
-  :proof-timeout 200
   (=> (>= (params-meshMessageDeliveriesCap (cdr wtpm))
           (params-meshMessageDeliveriesThreshold (cdr wtpm)))
       (b* ((weights (car wtpm))
            (params (cdr wtpm)))
         (<= (* (params-topicweight params)
-               (+ (* (first weights)
+               (+ (* (mget :w1 weights)
                      (calcP1 (tctrs-meshTime tctrs)
                              (params-meshTimeQuantum params)
                              (params-timeQuantaInMeshCap params)))
-                  (* (second weights)
+                  (* (mget :w2 weights)
                      (calcP2 (tctrs-firstMessageDeliveries tctrs)
                              (params-p2cap params)))))
             (* (params-topicweight params)
-               (+ (* (first weights)
+               (+ (* (mget :w1 weights)
                      (params-timeQuantaInMeshCap params))
-                  (* (second weights)
+                  (* (mget :w2 weights)
                      (params-p2cap params)))))))
   :hints (("Goal"
            :in-theory (enable weightsp paramsp calcP2 calcP1 wpp))))
@@ -570,17 +508,17 @@
            (params (cdr wtpm)))
         (<= (calcScoreTopic tctrs wtpm)
             (* (params-topicweight params)
-               (+ (* (first weights)
+               (+ (* (mget :w1 weights)
                      (calcP1 (tctrs-meshTime tctrs)
                              (params-meshTimeQuantum params)
                              (params-timeQuantaInMeshCap params)))
-                  (* (second weights)
+                  (* (mget :w2 weights)
                      (calcP2 (tctrs-firstMessageDeliveries tctrs)
                              (params-p2cap params))))))))
   :hints (("Goal"
            :in-theory (enable calcScoreTopic wpp weightsp paramsp))))
 
-;; limit on max. score, independent of counters
+ ;; limit on max. score, independent of counters
 (property max-topic-score (tctrs :tctrs wtpm :wp)
   (=> (>= (params-meshMessageDeliveriesCap (cdr wtpm))
           (params-meshMessageDeliveriesThreshold (cdr wtpm)))
@@ -588,9 +526,9 @@
            (params (cdr wtpm)))
         (<= (calcScoreTopic tctrs wtpm)
             (* (params-topicweight params)
-               (+ (* (first weights)
+               (+ (* (mget :w1 weights)
                      (params-timeQuantaInMeshCap params))
-                  (* (second weights)
+                  (* (mget :w2 weights)
                      (params-p2cap params)))))))
   :hints (("Goal" :use (max-helper2 max-helper3)
            :in-theory (enable wpp))))
@@ -603,135 +541,83 @@
   :function-contract-hints (("Goal" :in-theory (enable wpp)))
   :body-contracts-hints (("Goal" :in-theory (enable wpp)))
   :ic (>= (params-meshMessageDeliveriesCap (cdr wtpm))
-	  (params-meshMessageDeliveriesThreshold (cdr wtpm)))
+          (params-meshMessageDeliveriesThreshold (cdr wtpm)))
   (b* ((weights (car wtpm))
        (params (cdr wtpm)))
     (* (params-topicweight params)
-       (+ (* (first weights)
+       (+ (* (mget :w1 weights)
              (params-timeQuantaInMeshCap params))
-          (* (second weights)
+          (* (mget :w2 weights)
              (params-p2cap params)))
        )))
 
+(sig mget (:a (map :a :b)) => (or :b niltype))
 
-(definecd lookup-gctrs (p :peer map :p-gctrs-map) :gctrs
-  :skip-tests t
-  (let ((x (cdr (assoc-equal p map))))
+(definecd lookup-gctrs (p :peer gmap :p-gctrs-map) :gctrs
+  :try-induct-function-contractp t
+  (let ((x (mget p gmap)))
     (match x
-      (() '(0 0 0))
+      (() (new-gctrs))
       (& x))))
 
-(definecd lookup-tctrs (p :peer top :topic map :pt-tctrs-map) :tctrs
-  :skip-tests t
-  (let ((x (cdr (assoc-equal `(,p . ,top) map))))
+(definecd lookup-tctrs (p :peer top :topic ptmap :pt-tctrs-map) :tctrs
+  (let ((x (mget `(,p . ,top) ptmap)))
     (match x
       (() (new-tctrs))
       (& x))))
 
-(definecd lookup-score (p :peer map :peer-rational-map) :rational
-  :skip-tests t
-  (let ((x (cdr (assoc-equal p map))))
+;;TODO : pull out definitions in a separate files.
+(definecd lookup-score (p :peer prmap :peer-rational-map) :rational
+  (let ((x (mget p prmap)))
     (match x
       (() 0)
       (& x))))
 
 (definecd calc-glb-score (p :peer gbmap :p-gctrs-map weights :weights)
   :rational
-  :skip-tests t
   (let ((gc (lookup-gctrs p gbmap)))
-    (+ (* (sixth weights) (first gc))
-       (* (seventh weights) (second gc))
-       (* (eighth weights) (calcP7 (third gc))))))
+    (+ (* (mget :w5 weights) (mget :apco gc))
+       (* (mget :w6 weights) (mget :ipco gc))
+       (* (mget :w7 weights) (calcP7 (mget :bhvo gc))))))
 
-;; This shows that we only need P5 to get max score. Other
-;; components only lead to decline in the global score.
-(encapsulate
- ()
- (local
-   (property glb-1
-     (p :peer x :non-neg-rational y :non-neg-rational weights :weights)
-     :testing? nil
-     (<= (+ (* (caddr (cddddr weights))
-               x)
-            (* (cadddr (cddddr weights))
-               y))
-         0)
-     :hints (("Goal" :in-theory
-              (enable weightsp p-gctrs-mapp gctrsp)))
-     :rule-classes :linear))
- 
- (local
-   (property glb-2 (p :peer gbmap :p-gctrs-map weights :weights)
-     :testing? nil
-     (=> gbmap
-         (<= (* (calcp7 (cadddr (car gbmap)))
-                (cadddr (cddddr weights)))
-             0))
-     :hints (("Goal" :in-theory (enable weightsp)))))
-
- (local
-   (property glb-3 (p :peer gbmap :p-gctrs-map weights :weights)
-     :testing? nil
-     :check-contracts? nil
-     (=> (^ gbmap
-            (cdr (assoc-equal p gbmap)))
-         (<= (* (caddr (cddddr weights))
-                (caddr (assoc-equal p gbmap)))
-             0))
-     :hints (("Goal" :in-theory (enable weightsp gctrsp p-gctrs-mapp)))))
-
- (local
-   (property glb-4 (p :peer gbmap :p-gctrs-map weights :weights)
-     :testing? nil
-     :check-contracts? nil
-     (=> (^ (gctrsp (cdr (car gbmap)))
-            (cdr (assoc-equal p gbmap))
-            (acl2-numberp (cadr (assoc-equal p gbmap)))
-            (acl2-numberp (caddr (assoc-equal p gbmap))))
-         (<= (+ (* (caddr (cddddr weights))
-                   (caddr (assoc-equal p gbmap)))
-                (* (cadddr (cddddr weights))
-                   (calcp7 (cadddr (assoc-equal p gbmap)))))
-             0))
-     :hints (("Goal" :in-theory (enable weightsp gctrsp p-gctrs-mapp)))))
-
- (property max-glb-score (p :peer gbmap :p-gctrs-map weights :weights)
+;;max glb score possible
+(property max-glb-score (p :peer gbmap :p-gctrs-map weights :weights)
    :testing? nil
    (<= (calc-glb-score p gbmap weights)
-       (* (sixth weights) (first (lookup-gctrs p gbmap))))
+       (* (mget :w5 weights) (mget :apco (lookup-gctrs p gbmap))))
    :hints (("Goal" :in-theory
             (enable weightsp gctrsp lookup-gctrs p-gctrs-mapp
-                    calc-glb-score)))))
+                    calc-glb-score))))
 
  ;; armed with the above property, we know max. achievable glb score.
 (definecd calc-max-glb-score (p :peer gbmap :p-gctrs-map weights :weights)
   :rational
   :skip-tests t
-  (* (sixth weights) (first (lookup-gctrs p gbmap))))
+  (* (mget :w5 weights) (mget :apco (lookup-gctrs p gbmap))))
 
 (definecd calc-topic-scores
   (pt-ctrs :pt-tctrs-map twpm :twp acc :peer-rational-map) :peer-rational-map
   :ic (is-valid-twp twpm)
-  :skip-tests t
   (match pt-ctrs
     (() acc)
     ((((p . top) . ctrs) . rst)
      (b* ((tmp (lookup-score p acc))
-          (wp (cdr (assoc-equal top twpm)))
+          (wp (mget top twpm))
           ((when (null wp)) (calc-topic-scores rst twpm acc))
           (new-score (+ (calcScoreTopic ctrs wp) tmp)))
-       (calc-topic-scores rst twpm (put-assoc-equal p new-score acc))))))
+       (calc-topic-scores rst twpm (mset p new-score acc))))))
 
-(definecd add-glb-scores
-  (peers :lop topic-scores :peer-rational-map gbmap
+
+(definecd add-glb-scores (topic-scores :peer-rational-map gbmap
          :p-gctrs-map weights :weights topiccap :rational) :peer-rational-map
   :skip-tests t
-  (match peers
+  (match topic-scores
     (() '())
-    ((p . rst)
-     `((,p . ,(+ (min topiccap (lookup-score p topic-scores)) ;;apply topic cap here
-                 (calc-glb-score p gbmap weights)))
-       . ,(add-glb-scores rst topic-scores gbmap weights topiccap)))))
+    (((p . tscore) . rst)
+     (mset p
+           (+ (min topiccap tscore) ;;apply topic cap here
+              (calc-glb-score p gbmap weights))
+           (add-glb-scores rst gbmap weights topiccap)))))
 
 (definecd peers-from-pt-tctrs-map (map :pt-tctrs-map acc :lop) :lop
   (match map
@@ -748,7 +634,7 @@
 
 (property topiccap-twpm (twpm :twp)
   (=> (consp twpm)
-      (rationalp (g :topiccap (cddr (car twpm)))))
+      (rationalp (mget :topiccap (cddr (car twpm)))))
   :hints (("goal" :in-theory (enable twpp wpp))))
   
 (definecd calc-nbr-scores-map
@@ -757,9 +643,10 @@
          (is-valid-twp twpm))
   :skip-tests t
   :body-contracts-hints (("Goal" :in-theory (enable paramsp twpp wpp)))
-  (b* ((topic-scores-map (calc-topic-scores pt-ctrs twpm nil))
-       (peers (peers-from-pt-tctrs-map pt-ctrs nil)))
-    (add-glb-scores peers topic-scores-map gbmap (cadar twpm) (params-topiccap (cddar twpm)))))
+  (add-glb-scores (calc-topic-scores pt-ctrs twpm nil)
+                  gbmap
+                  (cadar twpm)
+                  (params-topiccap (cddar twpm))))
 
 (definecd calc-max-topic-scores
   (pt-ctrs :pt-tctrs-map twpm :twp acc :peer-rational-map)
@@ -772,36 +659,33 @@
     (() acc)
     ((((p . top) . &) . rst)
      (b* ((tmp (lookup-score p acc))
-          (wp (cdr (assoc-equal top twpm)))
+          (wp (mget top twpm))
           ((when (null wp)) (calc-max-topic-scores rst twpm acc))
           (new-score (+ (calcMaxScoreTopic wp) tmp)))
-       (calc-max-topic-scores rst twpm (put-assoc-equal p new-score acc))))))
+       (calc-max-topic-scores rst twpm (mset p new-score acc))))))
 
 (definecd add-max-glb-scores
-  (peers :lop topic-scores :peer-rational-map gbmap
-         :p-gctrs-map weights :weights topiccap :rational)
+  (topic-scores :peer-rational-map gbmap
+                :p-gctrs-map weights :weights topiccap :rational)
   :peer-rational-map
   :skip-tests t
-  (match peers
+  (match topic-scores
     (() '())
-    ((p . rst)
-     `((,p . ,(+ (min topiccap (lookup-score p topic-scores))
-                 (calc-max-glb-score p gbmap weights)))
-       . ,(add-max-glb-scores rst topic-scores gbmap weights topiccap)))))
+    (((p . tscore) . rst)
+     (mset p (+ (min topiccap tscore)
+                (calc-max-glb-score p gbmap weights))
+           (add-max-glb-scores rst gbmap weights topiccap)))))
 
 (definecd calc-max-nbr-scores-map (pt-ctrs :pt-tctrs-map gbmap :p-gctrs-map twpm :twp) :peer-rational-map
   :ic (^ (consp twpm)
          (is-valid-twp twpm))
   :skip-tests t
   :body-contracts-hints (("Goal" :in-theory (enable paramsp twpp wpp)))
-  (b* ((topic-scores-map (calc-max-topic-scores pt-ctrs twpm nil))
-       (peers (peers-from-pt-tctrs-map pt-ctrs nil)))
-    (add-max-glb-scores
-     peers
-     topic-scores-map
-     gbmap
-     (cadar twpm)
-     (params-topiccap (cddar twpm)))))
+  (add-max-glb-scores
+   (calc-max-topic-scores pt-ctrs twpm nil)
+   gbmap
+   (cadar twpm)
+   (params-topiccap (cddar twpm))))
 
 
 ;; Properties
@@ -815,7 +699,7 @@
 
 (defdata-attach non-neg-rational :enumerator nth-nneg-rat)
 
-;;1. Increasing meshTime increases topic-score. This gives a counter example.
+;;1. Increasing meshTime decreases topic-score. Here is a counter example.
 (acl2::must-fail
  (property mesh-time-inc-score
    (imd mmd mt fmd mfp p :non-neg-rational wtpm :wp)
@@ -839,7 +723,7 @@
 
  (local
    (property neg-fifth-weight (wt :weights)
-     (> 0 (fifth wt))
+     (> 0 (mget :w4 wt))
      :hints (("Goal" :in-theory (enable weightsp)))
      :rule-classes :linear))
           
@@ -909,158 +793,3 @@
       (<= (* c a)
           (* c b)))
   :rule-classes :linear)
-
-;; (property dec-calcP3-mult (meshTime :non-neg-rational
-;;                                activationWindow :nat
-;;                                meshMessageDeliveries :non-neg-rational
-;;                                meshMessageDeliveriesCap :nat
-;;                                meshMessageDeliveriesThreshold :nat
-;;                                weights :weights
-;;                                p :non-neg-rational)
-;;           (=> (^ (> meshTime activationWindow)
-;;                  (< meshMessageDeliveries meshMessageDeliveriesThreshold)
-;;                  (<= MESHMESSAGEDELIVERIESTHRESHOLD
-;;                      MESHMESSAGEDELIVERIESCAP)
-;;                  (< 0 p)
-;;                  (< 0 (- meshMessageDeliveries p)))
-;;               (>= (* (third weights)
-;;                     (calcP3 meshTime activationWindow meshMessageDeliveries
-;;                                meshMessageDeliveriesCap
-;;                                meshMessageDeliveriesThreshold))
-;;                  (* (third weights)
-;;                     (calcP3 meshTime activationWindow (- meshMessageDeliveries p)
-;;                                meshMessageDeliveriesCap
-;;                                meshMessageDeliveriesThreshold)))))
-
-;; (property dec-calcP3b-mult (meshTime :non-neg-rational
-;;                                      activationWindow :nat
-;;                                      meshFailurePenalty :non-neg-rational
-;;                                meshMessageDeliveries :non-neg-rational
-;;                                meshMessageDeliveriesCap :nat
-;;                                meshMessageDeliveriesThreshold :nat
-;;                                weights :weights
-;;                                p :non-neg-rational)
-;;           (=> (^ (> meshTime activationWindow)
-;;                  (< meshMessageDeliveries meshMessageDeliveriesThreshold)
-;;                  (<= MESHMESSAGEDELIVERIESTHRESHOLD
-;;                      MESHMESSAGEDELIVERIESCAP)
-;;                  (< 0 p)
-;;                  (< 0 (- meshMessageDeliveries p)))
-;;               (>= (* (fourth weights)
-;;                      (calcP3b meshTime activationWindow
-;;                               meshFailurePenalty
-;;                               meshMessageDeliveries
-;;                                meshMessageDeliveriesCap
-;;                                meshMessageDeliveriesThreshold))
-;;                  (* (fourth weights)
-;;                     (calcP3b meshTime activationWindow
-;;                              meshFailurePenalty
-;;                              (- meshMessageDeliveries p)
-;;                                meshMessageDeliveriesCap
-;;                                meshMessageDeliveriesThreshold)))))
-
-;; (property sum-gt (a :rational b :rational c :rational d :rational)
-;;           (=> (^ (>= a c)
-;;                  (>= b d))
-;;               (>= (+ a b)
-;;                   (+ c d))))
-
-
-;; ;; 5. Decreasing meshMessageDeliveries below the threshold (increasing the
-;; ;; deficit) decreases calcP3 + calcP3b score
-;; (property dec-sum-calcP3-calcP3b (meshTime :non-neg-rational
-;;                                            activationWindow :nat
-;;                                            meshFailurePenalty :non-neg-rational
-;;                                            meshMessageDeliveries :non-neg-rational
-;;                                            meshMessageDeliveriesCap :nat
-;;                                            meshMessageDeliveriesThreshold :nat
-;;                                            weights :weights
-;;                                            p :non-neg-rational)
-;;           (=> (^ (> meshTime activationWindow)
-;;                  (< meshMessageDeliveries meshMessageDeliveriesThreshold)
-;;                  (<= MESHMESSAGEDELIVERIESTHRESHOLD
-;;                      MESHMESSAGEDELIVERIESCAP)
-;;                  (< 0 p)
-;;                  (< 0 (- meshMessageDeliveries p)))
-;;               (>= (+ (* (third weights)
-;;                         (calcP3 meshTime activationWindow meshMessageDeliveries
-;;                                 meshMessageDeliveriesCap
-;;                                 meshMessageDeliveriesThreshold))
-;;                      (* (fourth weights)
-;;                         (calcP3b meshTime activationWindow
-;;                                  meshFailurePenalty
-;;                                  meshMessageDeliveries
-;;                                  meshMessageDeliveriesCap
-;;                                  meshMessageDeliveriesThreshold)))
-;;                   (+ (* (third weights)
-;;                         (calcP3 meshTime activationWindow (- meshMessageDeliveries p)
-;;                                 meshMessageDeliveriesCap
-;;                                 meshMessageDeliveriesThreshold))
-;;                      (* (fourth weights)
-;;                         (calcP3b meshTime activationWindow
-;;                                  meshFailurePenalty
-;;                                  (- meshMessageDeliveries p)
-;;                                  meshMessageDeliveriesCap
-;;                                  meshMessageDeliveriesThreshold))))))
-
-;; (property cancel-add (a :rational b :rational c :rational d :rational)
-;;           (=> (== a b)
-;;               (== (>= (+ a c) (+ b d))
-;;                   (>= c d))))
-
-;; (property cancel-add2 (a :rational b :rational c :rational d :rational e
-;;           :rational f :rational g :rational h :rational i :rational j :rational
-;;           e2 :rational f2 :rational g2 :rational h2 :rational tw :rational)
-;;           (== (<= (* tw
-;;                          (+ (* a b)
-;;                             (* c d)
-;;                             (* e f)
-;;                             (* g h)
-;;                             (* i j)))
-;;                       (* tw
-;;                          (+ (* a b)
-;;                             (* c d)
-;;                             (* e2 f2)
-;;                             (* g2 h2)
-;;                             (* i j))))
-;;                   (<= (* tw
-;;                          (+ (* e f)
-;;                             (* g h)))
-;;                       (* tw
-;;                          (+ (* e2 f2)
-;;                             (* g2 h2))))))
-
-;; (in-theory (disable calcP3 calcP3b))
-
-
-;; 3. Increasing deficit decreases score.
-;; (verify
-;;  (=> (^ (non-neg-rationalp imd)
-;;         (non-neg-rationalp mmd)
-;;         (non-neg-rationalp mt)
-;;         (non-neg-rationalp fmd)
-;;         (non-neg-rationalp mfp)
-;;         (non-neg-rationalp p)
-;;         (wpp wtpm)
-;;         (>= (params-meshMessageDeliveriesCap (cdr wtpm))
-;;             (params-meshMessageDeliveriesThreshold (cdr wtpm)))
-;;         (< 0 p)
-;;         (< 0 (- mmd p))
-;;         (< mmd (params-meshMessageDeliveriesThreshold (cdr wtpm))))
-;;      (>= (calcScoreTopic (tctrs imd mmd  mt fmd mfp) wtpm)
-;;          (calcScoreTopic (tctrs imd (- mmd p)  mt fmd mfp) wtpm))))
-
-
-;; 3. Increasing deficit decreases score.
-;; (property mmd-dec-score (imd :non-neg-rational mmd :non-neg-rational mt :non-neg-rational fmd
-;;                                    :non-neg-rational mfp :non-neg-rational p
-;;                                    :non-neg-rational wtpm :wp)
-;;           :check-contracts? nil
-;;           (=> (^ (>= (params-meshMessageDeliveriesCap (cdr wtpm))
-;;                      (params-meshMessageDeliveriesThreshold (cdr wtpm)))
-;;                  (< 0 p)
-;;                  (< 0 (- mmd p))
-;;                  (< mmd (params-meshMessageDeliveriesThreshold (cdr wtpm))))
-;;               (>= (calcScoreTopic (tctrs imd mmd  mt fmd mfp) wtpm)
-;;                   (calcScoreTopic (tctrs imd (- mmd p)  mt fmd mfp) wtpm)))
-;;           :hints (("Goal" :in-theory (enable wpp tctrsp calcScoreTopic))))
