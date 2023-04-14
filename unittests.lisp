@@ -103,7 +103,7 @@
                                     (MX JOIN FM)
                                     (TI JOIN FM)
                                     (MX LEAVE FM)
-                                    (CHRISTINA LEAVE FM))
+                                    (CR LEAVE FM))
                                   nil))
              (res (run-network grp evnts 1000 *factors* 40 nil))
              (final-grp (cdar (last res))))
@@ -310,7 +310,6 @@
              (endp (set-difference-equal
 		    peers
 		    (acl2::flatten (topic-mesh-graph final-grp 'FM)))))))
-
 
 
 ;;------------------------------------------------------------------------------------
