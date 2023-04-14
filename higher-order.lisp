@@ -52,7 +52,7 @@ higher-order.lisp.
              `(,lst-type l)))
        (args `(l ,@fixed-vars))
        (oc `(,return-type (,f* ,@args))))
-      `(defunc ,f* ,args
+      `(defuncd ,f* ,args
          :input-contract ,ic
          :output-contract ,oc
          (if (endp l)
@@ -69,7 +69,7 @@ higher-order.lisp.
 (create* x)
 
 |#
-
+ 
 (defmacro map* (fun lst &rest rst)
   (let ((f* (l-to-string `(map *-* ,fun))))
     `(,f* ,lst ,@rst)))
@@ -141,7 +141,7 @@ higher-order.lisp.
        (ic (append `(and (,lst1-type l1) (,lst2-type l2)) fixed-vars-types))
        (args `(l1 l2 ,@fixed-vars))
        (oc `(,return-type (,f* ,@args))))
-      `(defunc ,f* ,args
+      `(defuncd ,f* ,args
          :input-contract ,ic
          :output-contract ,oc
          (if (or (endp l1)
@@ -185,7 +185,7 @@ higher-order.lisp.
        (ic (append `(and (,base-type e) (,lst-type l) ,@fixed-vars-types)))
        (args `(e l ,@fixed-vars))
        (oc `(,base-type (,f* ,@args))))
-      `(defunc ,f* ,args
+      `(defuncd ,f* ,args
          :input-contract ,ic
          :output-contract ,oc
          (if (endp l)
@@ -242,7 +242,7 @@ higher-order.lisp.
              `(,lst-type l)))
        (args `(l ,@fixed-vars))
        (oc `(,lst-type (,f* ,@args))))
-      `(defunc ,f* ,args
+      `(defuncd ,f* ,args
          :input-contract ,ic
          :output-contract ,oc
          (cond ((endp l) ())
@@ -418,11 +418,6 @@ higher-order.lisp.
 (lift2* + rational rational rational)
 (check= (lift2*-*+ '(1 2 3 4 5) '(5 4 3 2 1)) '(6 6 6 6 6))
 |#
-
-
-
-
-
 
 (defmacro create-tuple* (&rest types)
   (b* ((name (l-to-string types)))
