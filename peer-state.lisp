@@ -10,71 +10,6 @@
           (nbr-gctrs . p-gctrs-map)
           (nbr-scores . peer-rational-map)))
 
-#|
-(property mset-diff-mset2 (a b x y r :all)
-  :check-contracts? nil
-  :hyps (!= a b)
-  :body (== (s b y (s a x r))
-            (s a x (s b y r))))
-
-(in-theory (disable acl2::mset-diff-mset))
-
-(property (z ms es nsm ntcm ngcm :all)
-  :testing? nil
-  (equal (peer-statep (S :mst ms
-			    (S :nts es
-				  (S :0TAG 'peer-state
-                                        (S :nbr-scores nsm
-					      (S :nbr-tctrs ntcm
-                                                    (S :nbr-gctrs ngcm
-                                                          NIL)))))))
-         z))
-
-         (and (nbr-topic-statep es)
-              (msgs-statep ms)
-              (peer-rational-mapp nsm)
-	      (pt-tctrs-mapp ntcm)
-              (p-gctrs-mapp ngcm)))
-  :hints (("goal" :in-theory (enable peer-statep))))
-|#
-
-(defthm peer-state-check2
-  (equal (peer-statep
-          (Ss nil
-              :mst ms :nts es :0TAG 'peer-state :nbr-scores nsm
-              :nbr-tctrs ntcm :nbr-gctrs ngcm))
-         (and (nbr-topic-statep es)
-              (msgs-statep ms)
-              (peer-rational-mapp nsm)
-              (pt-tctrs-mapp ntcm)
-              (p-gctrs-mapp ngcm)))
-  :hints (("goal" :in-theory (enable peer-statep))))
-
-(defthm peer-state-check3
-  (=>
-   (^ (nbr-topic-statep nts)
-      (msgs-statep ms)
-      (pt-tctrs-mapp tctrs)
-      (p-gctrs-mapp gctrs)
-      (peer-rational-mapp scores))
-   (peer-statep
-    (ss nil
-        :mst ms :nts nts :0tag 'peer-state
-        :nbr-gctrs gctrs :nbr-tctrs tctrs :nbr-scores scores)))
-  :hints (("goal" :in-theory (enable peer-statep))))
-
-(defthm peer-state-check4
-  (=> (peer-statep
-       (ss nil :mst ms :nts nts :0tag 'peer-state :nbr-gctrs gctrs
-           :nbr-tctrs tctrs :nbr-scores scores))
-      (^ (nbr-topic-statep nts)
-         (msgs-statep ms)
-         (pt-tctrs-mapp tctrs)
-         (p-gctrs-mapp gctrs)
-         (peer-rational-mapp scores)))
-  :hints (("goal" :in-theory (enable peer-statep)))
-  :rule-classes :forward-chaining)
-
 ;;initializes a new peer state if we need one, or don't have one already in the network
 (definecd new-peer-state () :peer-state
   (peer-state (new-nbr-topic-state)
@@ -82,8 +17,6 @@
               '()
               '()
               '()))
-
-(in-theory (disable peer-statep))
 
 (property snd-ihave-evnt (p1 p2 :peer pids :lopid)
   (EVNTP (LIST P1 'SND P2 'IHAVE pids))
@@ -103,6 +36,9 @@
   (lopp (flatten (strip-cdrs tlm))))
 
 (sig set-difference-equal ((listof :a) (listof :a)) => (listof :a))
+
+(property grab-mcache (mc :mcache n :nat)
+          (mcachep (grab n mc)))
 
 ;;emit gossip to d random nbrs
 (definecd gossip-emission (p :peer ps :peer-state d :nat params :params s :nat) :loev
@@ -129,22 +65,6 @@
        (gossip-nbrs (grab d (shuffle no-mf k))))
     (map* mapgossips gossip-nbrs p pids)))
 
-(definecd rev-lookup-topic (p :peer map :topic-lop-map) :lot
-  (match map
-    (() '())
-    (((tp . nbrs) . rst)
-     (if (in p nbrs)
-         (cons tp (rev-lookup-topic p rst))
-       (rev-lookup-topic p rst)))))
-
-(definecd collect-forward-nbrs (tp :topic map :peer-lot-map) :lop
-  (match map
-    (() '())
-    (((nbr . lot) . rst)
-     (if (in tp lot)
-         (cons nbr (collect-forward-nbrs tp rst))
-       (collect-forward-nbrs tp rst)))))
-
 (create-map* (lambda (nbr p pld) `(,p SND ,nbr PAYLOAD ,pld))
              lopp
              loevp
@@ -152,59 +72,52 @@
              (:name mapforwards))
 
 (in-theory (disable map*-*mapforwards))
-
 (sig remove-assoc-equal (:a (alistof :a :b)) => (alistof :a :b))
-(create-tuple* nbr-topic-state loev)
+(defdata res3
+  (record (nts . nbr-topic-state)
+          (evs . loev)))
 
+(in-theory (enable res3p))
 (definecd forward-emission-help
   (self source :peer ntst :nbr-topic-state payload :payload-type d k :nat)
-  :nbr-topic-stateloev
+  :res3
   :skip-tests t
+  :body-contracts-hints (("Goal" :DO-NOT-INDUCT T
+                          :in-theory (enable nbr-topic-statep)))
   (b* ((ms (nbr-topic-state-topic-mesh ntst))
        (fout (nbr-topic-state-topic-fanout ntst))
-       (top (third payload))
-       (orig (fourth payload))
-       (fwd-nbrs (remove orig
-                         (remove self
-                                 (cdr (assoc-equal top (nbr-topic-state-nbr-topicsubs ntst))))))
+       (top (payload-type-top payload))
+       (orig (payload-type-origin payload))
+       (nsubs (nbr-topic-state-nbr-topicsubs ntst))
+       (fwd-nbrs (set-difference-equal
+                  (mget top nsubs)
+                  `(,orig ,self)))
        (lp (nbr-topic-state-last-pub ntst))
-       (newlp `((,top . 0) . ,(remove-assoc-equal top lp)))
-       (fout-nbrs (cdr (assoc-equal top fout)))
+       (newlp (mset top 0 lp))
+       (fout-nbrs (mget top fout))
        (msubs (strip-cars ms)))
     (cond ((^ (in top msubs)
-              (consp (cdr (assoc-equal top ms))))
-           (list ntst
+              (consp (mget top ms)))
+           (res3 ntst
                  (map* mapforwards (set-difference-equal
-                                    (cdr (assoc-equal top ms))
+                                    (mget top ms)
                                     `(,self ,source ,orig))
                        self
                        payload)))
-          ((consp fout-nbrs) (list (update-last-pub ntst newlp)
+          ((consp fout-nbrs) (res3 (update-last-pub ntst newlp)
                                    (map* mapforwards fout-nbrs self
                                          payload)))
           (t (b* ((new-fout-nbrs
                    (grab d (shuffle fwd-nbrs k)))
-                  ((when (endp new-fout-nbrs)) (list ntst nil)))
-               (list (update-topic-fanout
+                  ((when (endp new-fout-nbrs)) (res3 ntst nil)))
+               (res3 (update-topic-fanout
                       (update-last-pub ntst newlp)
-                      (cons `(,top . ,new-fout-nbrs) fout))
+                      (mset top new-fout-nbrs fout))
                      (map* mapforwards (set-difference-equal
-                                        (cdr (assoc-equal top ms))
+                                        (mget top ms)
                                         `(,self ,source ,orig))
                            self
                            payload)))))))
-
-(property fwd-emission-help-thm1
-  (self :peer source :peer ntst :nbr-topic-state payload :payload-type d k :nat)
-  (nbr-topic-statep (first (forward-emission-help self source ntst payload d k)))
-  :hints (("Goal" :do-not-induct t
-           :in-theory (enable nbr-topic-stateloevp))))
-
-(property fwd-emission-help-thm2
-  (self source :peer ntst :nbr-topic-state payload :payload-type d k :nat)
-  (loevp (second (forward-emission-help self source ntst payload d k)))
-  :hints (("Goal" :do-not-induct t
-           :in-theory (enable nbr-topic-stateloevp forward-emission-help))))
 
 (definecd decay-mult (f :frac e :integer x :non-neg-rational d :frac)
   :non-neg-rational
@@ -216,18 +129,24 @@
       r)))
 
 (property assoc-twpm-ptc (twpm :twp top :topic)
-  (=> (^ (cddr (assoc-equal top twpm)))
-      (paramsp (cddr (assoc-equal top twpm)))))
-
+  (=> (cdr (mget top twpm))
+      (paramsp (cdr (mget top twpm)))))
 
 (property pos-rational-check (x :all)
   (=> (pos-rationalp x)
       (^ (rationalp x)
          (> x 0))))
 
+
 (encapsulate
  ()
     
+ (local
+   (property pos-rational-check (x :all)
+     (=> (pos-rationalp x)
+         (^ (rationalp x)
+            (> x 0)))))
+
  (local
    (defthm lt-0-not-0
      (=> (< 0 x)
@@ -239,7 +158,7 @@
             (cddr (assoc-equal (cdr (car (car ptc))) twpm))
             (pt-tctrs-mapp ptc)
             ptc)
-         (!= 0 (g :decayinterval
+         (!= 0 (mget :decayinterval
                      (cddr (assoc-equal (cdr (car (car ptc))) twpm)))))))
 
  (local
@@ -249,20 +168,29 @@
          (^ (integerp (floor a b))
             (<= 0 (floor a b))))))
      
- ;; TODO : add all other decays as well, including global decays
- (definecd decay-ctrs (ptc :pt-tctrs-map hbmint :pos-rational twpm :twp) :pt-tctrs-map
+ (property extract-cars-pttctrs-map (ptc :pt-tctrs-map)
+           (loptp (strip-cars ptc))
+           :hints (("Goal" :in-theory (enable pt-tctrs-mapp))))
+
+ (property mget-pttctrs-map (ptc :pt-tctrs-map x :pt)
+           (v (null (mget x ptc))
+              (tctrsp (mget x ptc)))
+           :hints (("Goal" :in-theory (enable pt-tctrs-mapp ptp))))
+
+ (definecd decay-ctrs (pts :lopt hbmint :pos-rational twpm :twp ptc :pt-tctrs-map ) :pt-tctrs-map
    :skip-tests t
    :timeout 600
    :function-contract-hints (("Goal" :in-theory (enable pt-tctrs-mapp)))
    :body-contracts-hints (("Goal" :in-theory (enable pt-tctrs-mapp)))
-   (match ptc
-     (() '())
-     ((((peer . top) . tctrs) . rst)
-      (b* ((params (cddr (assoc-equal top twpm)))
-           ((when (null params)) (cons (car ptc)
-                                       (decay-ctrs rst hbmint twpm)))
+   (match pts
+     (() ptc)
+     ((pt . rst)
+      (b* ((params (cdr (mget (cdr pt) twpm)))
+           ((when (null params)) (decay-ctrs rst hbmint twpm ptc))
            (d20 (params-decayToZero params))
            (e (floor hbmint (params-decayInterval params)))
+           (tctrs (mget pt ptc))
+           ((when (null tctrs)) (decay-ctrs rst hbmint twpm ptc))
            (decay-mmd (decay-mult (params-meshMessageDeliveriesDecay params)
                                   e
                                   (tctrs-meshMessageDeliveries tctrs)
@@ -271,12 +199,12 @@
                                   e
                                   (tctrs-firstMessageDeliveries tctrs)
                                   d20)))
-        (cons `(,(cons peer top) . ,(update-firstMessageDeliveries
-                                     (update-meshMessageDeliveries
-                                      tctrs
-                                      decay-mmd)
-                                     decay-fmd))
-              (decay-ctrs rst hbmint twpm)))))))
+      (decay-ctrs rst hbmint twpm (mset pt (update-firstMessageDeliveries
+                                            (update-meshMessageDeliveries
+                                             tctrs
+                                             decay-mmd)
+                                            decay-fmd)
+                                        ptc)))))))
 
 (property cdar-twpm (twpm :twp)
   (=> (cdar twpm)
@@ -288,11 +216,10 @@
       (paramsp (cddar twpm)))
   :rule-classes :forward-chaining)
 
-(create-tuple* peer-state loev)
 (sig strip-cars ((alistof :a :b)) => (listof :a))
 
 (property app-loev (xs ys :loev)
-  (loevp (app xs ys)))
+          (loevp (app xs ys)))
 
 (property evnt-payload-rcv (e :evnt)
   :check-contracts? nil
@@ -306,103 +233,134 @@
   :check-contracts? nil
   (=> (== (second e) 'APP)
       (^ (peerp (car e))
-         (topicp (third e))
-         (payload-typep (fourth e))))
+         (payload-typep (third e))))
   :hints (("Goal" :in-theory (enable evntp))))
 
-(definec forward-emission
+(definecd forward-emission
   (self :peer evnt :evnt ntstate :nbr-topic-state rs :msgpeer-age s d :nat)
-  :nbr-topic-stateloev
+  :res3
   :body-contracts-hints (("Goal" :in-theory (enable evntp)))
   :skip-tests t
   (match evnt
-    ((!self 'RCV & 'PAYLOAD m)
-     (if (^ (!= self (fourth m)) ;;if not the publisher
-            (! (in (payload2pid m)
+    ((!self 'RCV p 'PAYLOAD pld)
+     (if (^ (!= self (payload-type-origin pld)) ;;if not the publisher
+            (! (in (payload2pid pld)
                    (map* rs->pids (strip-cars rs)))))
-         (forward-emission-help self (third evnt) ntstate (fifth evnt) d s)
-       (list ntstate '())))
-    ((!self 'APP & m)
-     (forward-emission-help self self ntstate m d s))
-    (& (list ntstate '()))))
+         (forward-emission-help self p ntstate pld d s)
+       (res3 ntstate nil)))
+    ((!self 'APP pld)
+     (forward-emission-help self self ntstate pld d s))
+    (& (res3 ntstate '()))))
+
+
+(property fwd-emission-help-thm
+          (p1 :peer p2 :peer ntstate :nbr-topic-state pld :payload-type s d :nat)
+          :check-contracts? nil
+          (loevp (res3-evs (forward-emission-help p1 p2 ntstate pld d s)))
+          :hints (("Goal" :in-theory (enable forward-emission-help))))
 
 (property fwd-emission-thm1
   (self :peer evnt :evnt ntstate :nbr-topic-state rs :msgpeer-age s d :nat)
-  :check-contracts? nil
-  (nbr-topic-statep (first (forward-emission self evnt ntstate rs s d))))
+  (nbr-topic-statep (res3-nts (forward-emission self evnt ntstate rs s d))))
 
 (property fwd-emission-thm2
   (self :peer evnt :evnt ntstate :nbr-topic-state rs :msgpeer-age s d :nat)
-  (loevp (second (forward-emission self evnt ntstate rs s d))))
-
-(definecd is-hbm-evnt (ev :evnt) :boolean
-  :body-contracts-hints (("Goal" :do-not-induct t
-                          :in-theory (enable evntp)))
-  (== (second ev) 'HBM))
+  (loevp (res3-evs (forward-emission self evnt ntstate rs s d))))
 
 (defthm mget-d
   (=> (^ (twpp twpm)
          twpm)
-      (natp (g :d (cddr (car twpm)))))
+      (natp (mget :d (cddr (car twpm)))))
   :rule-classes :forward-chaining)
 
-(in-theory (disable peer-state-nts  peer-state-mst peer-state-nbr-tctrs
+(in-theory (disable peer-state-nts peer-state-mst peer-state-nbr-tctrs
                     peer-state-nbr-gctrs peer-state-nbr-scores))
 
+(defdata res4
+  (record (pst . peer-state)
+          (evs . loev)))
+(in-theory (enable res4p))
+
+(property bind-update-nbr-topic-state
+  (nts :nbr-topic-state nbr-scores
+       :peer-rational-map tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp s
+       :nat)
+  :check-contracts? nil
+  (b* (((res1 a b c d e)
+        (update-nbr-topic-state nts nbr-scores tcmap
+                                gcmap evnt twpm s)))
+    (^ (nbr-topic-statep a)
+       (loevp b)
+       (pt-tctrs-mapp c)
+       (p-gctrs-mapp d)
+       (peer-rational-mapp e)))
+  :hints (("Goal" :in-theory (enable update-nbr-topic-state))))
+
+(property bind-update-msgs-state
+  (mst :msgs-state tcmap :pt-tctrs-map
+       gcmap :p-gctrs-map evnt :evnt twpm :twp)
+  :check-contracts? nil
+  (b* (((res2 a b c d)
+        (update-msgs-state mst evnt tcmap gcmap twpm)))
+    (^ (msgs-statep a)
+       (loevp b)
+       (pt-tctrs-mapp c)
+       (p-gctrs-mapp d)))
+  :hints (("Goal" :in-theory (enable update-msgs-state update-msgs-state1 evntp))))
+
 (definecd transition
-  (self :peer pstate :peer-state evnt :evnt twpm :twp s :nat) :peer-stateloev
+  (self :peer pstate :peer-state evnt :evnt twpm :twp s :nat) :res4
   :skip-tests t
   :timeout 2000
+  :function-contract-hints (("Goal" :in-theory (enable evntp forward-emission
+                                                    update-nbr-topic-state
+                                                    update-nbr-topic-state1
+                                                    update-nbr-topic-state2
+                                                    update-nbr-topic-state3
+                                                    update-msgs-state
+                                                    update-msgs-state1
+                                                    update-msgs-state2)))
+  :body-contracts-hints (("Goal" :in-theory (enable evntp forward-emission
+						    forward-emission-help
+                                                    update-nbr-topic-state
+                                                    update-nbr-topic-state1
+                                                    update-nbr-topic-state2
+                                                    update-nbr-topic-state3
+                                                    update-msgs-state
+                                                    update-msgs-state1
+                                                    update-msgs-state2)))
   :ic (is-valid-twp twpm)
-  :function-contract-hints (("Goal" :do-not-induct t
-                             :in-theory (enable
-                                         peer-statep
-                                         is-hbm-evnt)))
-  :body-contracts-hints (("Goal" :do-not-induct t
-                          :in-theory (enable evntp
-                                             update-nbr-topic-state
-                                             update-nbr-topic-state1
-                                             update-nbr-topic-state2
-                                             update-nbr-topic-state3
-                                             update-msgs-state
-                                             update-msgs-state1
-                                             update-msgs-state2
-                                             is-hbm-evnt
-                                             forward-emission
-                                             forward-emission-help)))
-  (b* ((defaultres (list pstate nil))
+  (b* ((defaultres (res4 pstate nil))
        (ntstate (peer-state-nts pstate))
        (params (cddar twpm))
        ((when (null params)) defaultres)
        (nbr-tctrs (peer-state-nbr-tctrs pstate))
        (nbr-gctrs (peer-state-nbr-gctrs pstate))
-       (scores (if (is-hbm-evnt evnt)
+       (scores (if (hbm-evntp evnt)
                    (calc-nbr-scores-map nbr-tctrs nbr-gctrs twpm)
                  (peer-state-nbr-scores pstate)))
        (d (params-d params))
        (msgstate (peer-state-mst pstate))
        (rs (msgs-state-recently-seen msgstate))
-       (gossips (if (is-hbm-evnt evnt)
+       (gossips (if (hbm-evntp evnt)
                     (gossip-emission (car evnt) pstate d params s)
                   ()))
-       ((list ntstate forwards) (forward-emission self evnt ntstate rs s d))
-       ((list ntstate evnts tctrs gctrs scores)
+       ((res3 ntstate forwards) (forward-emission self evnt ntstate rs s d))
+       ((res1 ntstate evnts tctrs gctrs scores)
         (update-nbr-topic-state ntstate scores nbr-tctrs nbr-gctrs evnt twpm
                                 s))
-       ((list msgstate evnts2 tctrs gctrs)
+       ((res2 msgstate evnts2 tctrs gctrs)
         (update-msgs-state msgstate evnt tctrs gctrs twpm))
-       (tctrs (if (is-hbm-evnt evnt)
-                  (decay-ctrs tctrs (third evnt) twpm)
+       (tctrs (if (hbm-evntp evnt)
+                  (decay-ctrs (strip-cars tctrs) (third evnt) twpm tctrs)
                 tctrs)))
-    (list (peer-state ntstate
+    (res4 (peer-state ntstate
                       msgstate
                       tctrs
-                      gctrs ;; TODO : will need to decay this as well
+                      gctrs 
                       scores)
           (app evnts
                evnts2
                forwards
                gossips))))
-
-
-(in-theory (disable update-msgs-state evntp))
