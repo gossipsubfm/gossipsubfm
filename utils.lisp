@@ -1,6 +1,9 @@
 (in-package "ACL2S")
 ;; Some utility functions
 
+(set-acl2s-property-table-proof-timeout 1000)
+(set-defunc-timeout 1000)
+
 (defdata lol (listof tl))
 (defdata lor (listof rational))
 (defdata lon (listof nat))
@@ -93,11 +96,3 @@
 (definecd median (ls :lor) :rational
   :ic (consp ls)
   (median-help (isort ls) '()))
-
-(definecd extract-keys (keys :tl al :alist) :alist
-  (match al
-    (() '())
-    (((k . &) . rst)
-     (if (in k keys)
-         (cons (car al) (extract-keys keys rst))
-       (extract-keys keys rst)))))
