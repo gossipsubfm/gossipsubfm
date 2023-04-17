@@ -1,6 +1,6 @@
 # 💬 GossipSub FM Model Repository
 
-![A GossipSub Network](notes/gsfm.png)
+![A GossipSub Network](gsfm.png)
 
 GossipSub is a new peer-to-peer communication protocol designed to
 counter attacks from misbehaving peers by controlling what information
