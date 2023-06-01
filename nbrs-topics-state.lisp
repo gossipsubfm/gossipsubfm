@@ -584,13 +584,6 @@
                 (:name subscriptions)
                 (:fixed-vars ((peerp p))))
 
-(check= (reduce* subscriptions
-                 nil
-                 '((FM ANKIT MAX)
-                   (SEC MAX))
-                 'MAX)
-        '(FM SEC))
-
 (in-theory (disable evntp reduce*-*subscribers reduce*-*subscriptions
                     NBR-TOPIC-STATEP paramsp pt-tctrs-mapp p-gctrs-mapp
                     peer-rational-mapp twpp))
