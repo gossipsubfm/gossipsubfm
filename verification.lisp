@@ -2,7 +2,6 @@
 ;; (include-book "interface/top")
 
 (include-book "network")
-;;stealing Pete's utilities file
 (include-book "utilities")
 
 (modeling-start)
