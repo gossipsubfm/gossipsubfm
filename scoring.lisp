@@ -86,8 +86,7 @@
 (defdata pt (cons peer topic))
 (defdata lopt (listof pt))
 
-;; Pete: try making this into a map and use mget/ mset instead and do
-;; this for all similar alistof types.
+
 (defdata pt-tctrs-map (map pt tctrs))
 
 
