@@ -1,5 +1,7 @@
 # 💬 GossipSub FM Model Repository
 
+This repository contains the code artifacts for the paper [Formal Model-Driven Analysis of Resilience of GossipSub to Attacks from Misbehaving Peers](https://arxiv.org/abs/2212.05197) by [Ankit Kumar](https://ankitku.github.io/), [Max von Hippel](https://mxvh.pl/), [Pete Manolios](https://www.khoury.northeastern.edu/~pete/), and [Cristina Nita-Rotaru](https://cnitarot.github.io/), in IEEE S&P 2024.  The models and proofs can also be found in the [ACL2 books](https://github.com/acl2/acl2/tree/master/books/workshops/2023/kumar-etal), and more details can be found in our [ACL2 2023 workshop paper](https://arxiv.org/pdf/2311.08859).
+
 ![A GossipSub Network](gsfm.png)
 
 GossipSub is a new peer-to-peer communication protocol designed to
